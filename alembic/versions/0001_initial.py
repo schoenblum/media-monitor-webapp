@@ -18,12 +18,23 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    user_role = postgresql.ENUM("admin", "user", name="user_role", create_type=False)
-    run_status = postgresql.ENUM("pending", "running", "complete", "failed", name="run_status", create_type=False)
-    run_trigger = postgresql.ENUM("manual", "webhook", name="run_trigger", create_type=False)
-    user_role.create(op.get_bind(), checkfirst=True)
-    run_status.create(op.get_bind(), checkfirst=True)
-    run_trigger.create(op.get_bind(), checkfirst=True)
+    # Use raw DO blocks so we are safe on partial-upgrade retries.
+    op.execute(
+        "DO $$ BEGIN "
+        "IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname='user_role') THEN "
+        "CREATE TYPE user_role AS ENUM ('admin', 'user'); END IF; END $$;"
+    )
+    op.execute(
+        "DO $$ BEGIN "
+        "IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname='run_status') THEN "
+        "CREATE TYPE run_status AS ENUM ('pending', 'running', 'complete', 'failed'); "
+        "END IF; END $$;"
+    )
+    op.execute(
+        "DO $$ BEGIN "
+        "IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname='run_trigger') THEN "
+        "CREATE TYPE run_trigger AS ENUM ('manual', 'webhook'); END IF; END $$;"
+    )
 
     op.create_table(
         "users",
@@ -31,7 +42,7 @@ def upgrade() -> None:
         sa.Column("email", sa.String(255), nullable=False, unique=True),
         sa.Column("backup_email", sa.String(255), nullable=True),
         sa.Column("password_hash", sa.String(255), nullable=False),
-        sa.Column("role", sa.Enum("admin", "user", name="user_role", create_type=False), nullable=False),
+        sa.Column("role", postgresql.ENUM("admin", "user", name="user_role", create_type=False), nullable=False),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("google_api_key_encrypted", sa.LargeBinary(), nullable=True),
         sa.Column("search_engine_id_encrypted", sa.LargeBinary(), nullable=True),
@@ -100,8 +111,8 @@ def upgrade() -> None:
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("user_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
         sa.Column("search_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("searches.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("triggered_by", sa.Enum("manual", "webhook", name="run_trigger", create_type=False), nullable=False, server_default="manual"),
-        sa.Column("status", sa.Enum("pending", "running", "complete", "failed", name="run_status", create_type=False), nullable=False, server_default="pending"),
+        sa.Column("triggered_by", postgresql.ENUM("manual", "webhook", name="run_trigger", create_type=False), nullable=False, server_default="manual"),
+        sa.Column("status", postgresql.ENUM("pending", "running", "complete", "failed", name="run_status", create_type=False), nullable=False, server_default="pending"),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("api_calls_used", sa.Integer(), nullable=False, server_default="0"),

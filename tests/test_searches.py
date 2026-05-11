@@ -8,7 +8,7 @@ from openpyxl import load_workbook
 async def _login(client):
     r = await client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@test.local", "password": "TestAdminPassword!"},
+        json={"email": "admin@example.com", "password": "TestAdminPassword!"},
     )
     assert r.status_code == 200
     return {"Authorization": f"Bearer {r.json()['access_token']}"}

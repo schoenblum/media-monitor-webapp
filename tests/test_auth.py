@@ -13,7 +13,7 @@ async def test_health(client):
 async def test_login_bootstrap_admin(client):
     r = await client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@test.local", "password": "TestAdminPassword!"},
+        json={"email": "admin@example.com", "password": "TestAdminPassword!"},
     )
     assert r.status_code == 200, r.text
     data = r.json()
@@ -31,7 +31,7 @@ async def test_me_requires_token(client):
 async def test_change_password_flow(client):
     login = await client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@test.local", "password": "TestAdminPassword!"},
+        json={"email": "admin@example.com", "password": "TestAdminPassword!"},
     )
     token = login.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -46,13 +46,13 @@ async def test_change_password_flow(client):
     # Old password should now fail.
     r = await client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@test.local", "password": "TestAdminPassword!"},
+        json={"email": "admin@example.com", "password": "TestAdminPassword!"},
     )
     assert r.status_code == 401
 
     r = await client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@test.local", "password": "BrandNewPwd1!"},
+        json={"email": "admin@example.com", "password": "BrandNewPwd1!"},
     )
     assert r.status_code == 200
     assert r.json()["force_password_change"] is False

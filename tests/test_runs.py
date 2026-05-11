@@ -10,7 +10,7 @@ from app.services.date_extractor import extract_date
 async def _login(client):
     r = await client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@test.local", "password": "TestAdminPassword!"},
+        json={"email": "admin@example.com", "password": "TestAdminPassword!"},
     )
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
