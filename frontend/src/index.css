@@ -1,0 +1,48 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-brand text-white hover:bg-brand-dark focus:ring-brand;
+  }
+  .btn-secondary {
+    @apply btn bg-white text-slate-700 ring-1 ring-inset ring-slate-300 hover:bg-slate-50 focus:ring-slate-400;
+  }
+  .btn-danger {
+    @apply btn bg-red-600 text-white hover:bg-red-700 focus:ring-red-500;
+  }
+  .btn-ghost {
+    @apply btn bg-transparent text-slate-700 hover:bg-slate-100 focus:ring-slate-400;
+  }
+  .input {
+    @apply block w-full rounded-md border-0 px-3 py-2 text-sm text-slate-900 ring-1 ring-inset ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-brand;
+  }
+  .label {
+    @apply block text-sm font-medium text-slate-700;
+  }
+  .card {
+    @apply rounded-lg border border-slate-200 bg-white shadow-sm;
+  }
+  .pill {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+  .pill-green {
+    @apply pill bg-emerald-100 text-emerald-800;
+  }
+  .pill-amber {
+    @apply pill bg-amber-100 text-amber-800;
+  }
+  .pill-red {
+    @apply pill bg-red-100 text-red-800;
+  }
+  .pill-blue {
+    @apply pill bg-sky-100 text-sky-800;
+  }
+  .pill-slate {
+    @apply pill bg-slate-100 text-slate-700;
+  }
+}

@@ -1,0 +1,242 @@
+"""Run lifecycle + result selection + CSV export."""
+import csv
+import io
+from typing import Sequence
+from uuid import UUID
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
+from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import get_db
+from app.deps import get_current_user
+from app.models.result import Result
+from app.models.run import Run, RunStatus, RunTrigger
+from app.models.search import Search
+from app.models.user import User
+from app.schemas.run import (
+    ResultOut,
+    ResultSelectionUpdate,
+    ResultsPage,
+    RunCreate,
+    RunOut,
+)
+from app.services.search_engine import execute_run
+
+
+router = APIRouter(prefix="/runs", tags=["runs"])
+
+
+async def _run_to_out(db: AsyncSession, run: Run, *, search_name: str | None = None) -> RunOut:
+    count = (
+        await db.execute(select(func.count(Result.id)).where(Result.run_id == run.id))
+    ).scalar_one()
+    return RunOut(
+        id=run.id,
+        search_id=run.search_id,
+        triggered_by=run.triggered_by,
+        status=run.status,
+        started_at=run.started_at,
+        completed_at=run.completed_at,
+        api_calls_used=run.api_calls_used,
+        error_message=run.error_message,
+        search_name=search_name,
+        result_count=int(count or 0),
+    )
+
+
+@router.get("", response_model=list[RunOut])
+async def list_runs(
+    search_id: UUID | None = None,
+    status_filter: RunStatus | None = Query(default=None, alias="status"),
+    current: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[RunOut]:
+    stmt = (
+        select(Run, Search.name)
+        .join(Search, Search.id == Run.search_id)
+        .where(Run.user_id == current.id)
+        .order_by(Run.started_at.desc())
+    )
+    if search_id is not None:
+        stmt = stmt.where(Run.search_id == search_id)
+    if status_filter is not None:
+        stmt = stmt.where(Run.status == status_filter)
+    rows = (await db.execute(stmt)).all()
+    out: list[RunOut] = []
+    for run, name in rows:
+        out.append(await _run_to_out(db, run, search_name=name))
+    return out
+
+
+@router.post("", response_model=RunOut, status_code=status.HTTP_202_ACCEPTED)
+async def trigger_run(
+    payload: RunCreate,
+    background: BackgroundTasks,
+    current: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> RunOut:
+    search = await db.get(Search, payload.search_id)
+    if search is None or search.user_id != current.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Search not found")
+    if not current.google_api_key_encrypted or not current.search_engine_id_encrypted:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Configure your Google API credentials in Settings before running a search.",
+        )
+    run = Run(
+        user_id=current.id,
+        search_id=search.id,
+        triggered_by=RunTrigger.manual,
+        status=RunStatus.pending,
+    )
+    db.add(run)
+    await db.commit()
+    await db.refresh(run)
+    background.add_task(execute_run, run.id)
+    return await _run_to_out(db, run, search_name=search.name)
+
+
+@router.get("/export")
+async def export_runs(
+    run_ids: list[UUID] = Query(..., alias="run_ids[]"),
+    current: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    """Export all `is_selected=true` results across the given runs as a single CSV.
+
+    Sorted by `date_extracted` descending, with empty dates pushed to the end.
+    """
+    if not run_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No run_ids provided")
+    owned = (
+        await db.execute(
+            select(Run.id).where(Run.id.in_(run_ids), Run.user_id == current.id)
+        )
+    ).scalars().all()
+    owned_set = set(owned)
+    for rid in run_ids:
+        if rid not in owned_set:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail=f"Not authorised for run {rid}"
+            )
+
+    rows = (
+        await db.execute(
+            select(Result).where(Result.run_id.in_(run_ids), Result.is_selected.is_(True))
+        )
+    ).scalars().all()
+
+    def _date_key(r: Result) -> tuple[int, str]:
+        # Empty dates -> push last (sort tuple: presence flag, date string).
+        return (0 if r.date_extracted else 1, r.date_extracted or "")
+
+    rows_sorted: Sequence[Result] = sorted(rows, key=_date_key)
+    # We want date descending. Stable sort on (-present, date desc) easier in two passes:
+    rows_sorted = sorted(rows_sorted, key=lambda r: r.date_extracted or "", reverse=True)
+    rows_sorted = sorted(rows_sorted, key=lambda r: 0 if r.date_extracted else 1)
+
+    buf = io.StringIO()
+    buf.write("﻿")  # BOM for Excel UTF-8
+    writer = csv.writer(buf, quoting=csv.QUOTE_ALL, lineterminator="\r\n")
+    writer.writerow(["Date", "Media", "Language", "Headline", "URL"])
+    for r in rows_sorted:
+        writer.writerow([
+            r.date_extracted,
+            r.outlet_name,
+            (r.detected_lang or "").upper(),
+            r.title,
+            r.url,
+        ])
+
+    from datetime import date
+
+    filename = f"media_hits_{date.today().strftime('%Y%m%d')}.csv"
+    out_bytes = buf.getvalue().encode("utf-8")
+    return StreamingResponse(
+        io.BytesIO(out_bytes),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{run_id}", response_model=RunOut)
+async def get_run(
+    run_id: UUID,
+    current: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> RunOut:
+    run = await db.get(Run, run_id)
+    if run is None or run.user_id != current.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    search = await db.get(Search, run.search_id)
+    return await _run_to_out(db, run, search_name=search.name if search else None)
+
+
+@router.get("/{run_id}/results", response_model=ResultsPage)
+async def get_results(
+    run_id: UUID,
+    lang: str | None = None,
+    selected: bool | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(200, ge=1, le=1000),
+    current: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ResultsPage:
+    run = await db.get(Run, run_id)
+    if run is None or run.user_id != current.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    stmt = select(Result).where(Result.run_id == run_id)
+    if lang:
+        stmt = stmt.where(Result.detected_lang == lang.lower())
+    if selected is not None:
+        stmt = stmt.where(Result.is_selected.is_(selected))
+    total = (
+        await db.execute(select(func.count()).select_from(stmt.subquery()))
+    ).scalar_one()
+    stmt = (
+        stmt.order_by(Result.detected_lang.asc(), Result.date_extracted.desc(), Result.created_at.asc())
+        .limit(page_size)
+        .offset((page - 1) * page_size)
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+    return ResultsPage(
+        items=[ResultOut.model_validate(r) for r in rows],
+        total=int(total or 0),
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.patch("/{run_id}/results", status_code=status.HTTP_204_NO_CONTENT)
+async def update_result_selection(
+    run_id: UUID,
+    payload: ResultSelectionUpdate,
+    current: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    run = await db.get(Run, run_id)
+    if run is None or run.user_id != current.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    if not payload.result_ids:
+        return
+    await db.execute(
+        update(Result)
+        .where(Result.id.in_(payload.result_ids), Result.run_id == run_id)
+        .values(is_selected=payload.selected)
+    )
+    await db.commit()
+
+
+@router.delete("/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_run(
+    run_id: UUID,
+    current: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    run = await db.get(Run, run_id)
+    if run is None or run.user_id != current.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    await db.delete(run)
+    await db.commit()
