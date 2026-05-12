@@ -1,4 +1,6 @@
 .env
+HANDOVER.md
+HANDOVER*.md
 *.db
 __pycache__/
 *.pyc
