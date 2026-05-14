@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI):  # noqa: D401
     yield
 
 
-app = FastAPI(title="Media Monitor", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="Media Monitor", version="2.1.0", lifespan=lifespan)
 
 
 @app.get("/api/v1/health", tags=["health"])
