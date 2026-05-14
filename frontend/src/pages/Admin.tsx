@@ -3,14 +3,21 @@ import { api } from "../api/client";
 import type { User } from "../api/types";
 import { Spinner } from "../components/Spinner";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { useAuth } from "../auth";
+
+type CreatedInfo = { email: string; password: string; email_sent: boolean };
 
 export default function Admin() {
+  const { user: currentUser } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [newEmail, setNewEmail] = useState("");
   const [newRole, setNewRole] = useState<"admin" | "user">("user");
-  const [created, setCreated] = useState<{ email: string; password: string } | null>(null);
+  const [created, setCreated] = useState<CreatedInfo | null>(null);
   const [deleting, setDeleting] = useState<User | null>(null);
+  const [duplicating, setDuplicating] = useState<User | null>(null);
+  const [dupEmail, setDupEmail] = useState("");
+  const [dupLoading, setDupLoading] = useState(false);
 
   useEffect(() => {
     refresh();
@@ -29,7 +36,7 @@ export default function Admin() {
     if (!newEmail.trim()) return;
     try {
       const r = await api.createUser(newEmail.trim(), newRole);
-      setCreated({ email: r.user.email, password: r.initial_password });
+      setCreated({ email: r.user.email, password: r.initial_password, email_sent: r.email_sent });
       setNewEmail("");
       setNewRole("user");
       await refresh();
@@ -39,13 +46,45 @@ export default function Admin() {
   }
 
   async function toggleActive(u: User) {
-    await api.updateUser(u.id, { is_active: !u.is_active });
-    await refresh();
+    try {
+      await api.updateUser(u.id, { is_active: !u.is_active });
+      await refresh();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Update failed");
+    }
   }
 
   async function toggleRole(u: User) {
-    await api.updateUser(u.id, { role: u.role === "admin" ? "user" : "admin" });
-    await refresh();
+    if (u.id === currentUser?.id && u.role === "admin") {
+      if (!confirm("Demoting yourself will remove your admin access immediately. Continue?")) return;
+    }
+    try {
+      await api.updateUser(u.id, { role: u.role === "admin" ? "user" : "admin" });
+      await refresh();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Update failed");
+    }
+  }
+
+  async function startDuplicate(u: User) {
+    setDuplicating(u);
+    setDupEmail("");
+  }
+
+  async function confirmDuplicate() {
+    if (!duplicating || !dupEmail.trim()) return;
+    setDupLoading(true);
+    try {
+      const r = await api.duplicateUser(duplicating.id, dupEmail.trim());
+      setCreated({ email: r.user.email, password: r.initial_password, email_sent: r.email_sent });
+      setDuplicating(null);
+      setDupEmail("");
+      await refresh();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Duplicate failed");
+    } finally {
+      setDupLoading(false);
+    }
   }
 
   if (loading) return <Spinner className="h-6 w-6 text-brand" />;
@@ -61,6 +100,7 @@ export default function Admin() {
             placeholder="email@example.com"
             value={newEmail}
             onChange={(e) => setNewEmail(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") createUser(); }}
           />
           <select
             className="input"
@@ -97,7 +137,12 @@ export default function Admin() {
             <tbody>
               {users.map((u) => (
                 <tr key={u.id} className="border-t border-slate-100">
-                  <td className="py-1.5 font-medium">{u.email}</td>
+                  <td className="py-1.5 font-medium">
+                    {u.email}
+                    {u.id === currentUser?.id && (
+                      <span className="ml-2 text-xs text-slate-400">(you)</span>
+                    )}
+                  </td>
                   <td className="py-1.5">
                     <button
                       className={u.role === "admin" ? "pill-blue" : "pill-slate"}
@@ -123,6 +168,13 @@ export default function Admin() {
                     {u.last_login ? new Date(u.last_login).toLocaleString() : "—"}
                   </td>
                   <td className="py-1.5 text-right">
+                    <button
+                      className="btn-ghost mr-1"
+                      onClick={() => startDuplicate(u)}
+                      title="Duplicate user — copies searches, outlets, languages, and run history"
+                    >
+                      Duplicate
+                    </button>
                     <button className="btn-ghost text-red-600" onClick={() => setDeleting(u)}>
                       Delete
                     </button>
@@ -135,6 +187,44 @@ export default function Admin() {
       </div>
 
       {created && <CreatedModal info={created} onClose={() => setCreated(null)} />}
+
+      {/* Duplicate user dialog */}
+      {duplicating && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="card w-full max-w-md p-5">
+            <h2 className="text-lg font-semibold">Duplicate user</h2>
+            <p className="mt-2 text-sm text-slate-600">
+              Create a new account with all the data from{" "}
+              <strong>{duplicating.email}</strong> (searches, languages, outlets, run history).
+              Enter the new account's email address:
+            </p>
+            <input
+              className="input mt-3 w-full"
+              type="email"
+              placeholder="new-user@example.com"
+              value={dupEmail}
+              onChange={(e) => setDupEmail(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") confirmDuplicate(); }}
+              autoFocus
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                className="btn-secondary"
+                onClick={() => { setDuplicating(null); setDupEmail(""); }}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn-primary"
+                disabled={!dupEmail.trim() || dupLoading}
+                onClick={confirmDuplicate}
+              >
+                {dupLoading && <Spinner />} Duplicate
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <ConfirmDialog
         open={!!deleting}
@@ -153,7 +243,13 @@ export default function Admin() {
   );
 }
 
-function CreatedModal({ info, onClose }: { info: { email: string; password: string }; onClose: () => void }) {
+function CreatedModal({
+  info,
+  onClose,
+}: {
+  info: CreatedInfo;
+  onClose: () => void;
+}) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
       <div className="card w-full max-w-md p-5">
@@ -162,6 +258,15 @@ function CreatedModal({ info, onClose }: { info: { email: string; password: stri
           Give this user their initial credentials below. They will be required to change the
           password on first login.
         </p>
+        {info.email_sent ? (
+          <p className="mt-2 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+            A welcome email with the initial password has been sent to {info.email}.
+          </p>
+        ) : (
+          <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-700">
+            No SMTP configured — send the credentials below manually.
+          </p>
+        )}
         <div className="mt-3 space-y-2 text-sm">
           <div>
             <div className="text-xs uppercase text-slate-400">Email</div>

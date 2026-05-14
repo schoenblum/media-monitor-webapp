@@ -1,19 +1,17 @@
-"""First-run bootstrap — seed admin account and default outlets per user."""
+"""First-run bootstrap — seed admin account, default outlets, and university language."""
 import logging
+import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import SessionLocal
-from app.models.outlet import Outlet, SearchOutletLink
-from app.models.search import Search, SearchTerm
+from app.models.language import UniversityLanguage
+from app.models.outlet import Outlet
+from app.models.search import DEFAULT_SEARCH_CONFIG, Search
 from app.models.user import User, UserRole
-from app.services.default_outlets import (
-    DEFAULT_KEYWORDS,
-    DEFAULT_LANGUAGE_PAGES,
-    DEFAULT_OUTLETS,
-)
+from app.services.default_outlets import DEFAULT_OUTLETS
 from app.services.security import hash_password
 
 
@@ -22,14 +20,14 @@ settings = get_settings()
 
 
 async def seed_user_defaults(db: AsyncSession, user: User) -> None:
-    """Seed the default outlet library and one ready-to-run Search for a new user."""
-    # Skip if the user already has outlets.
+    """Seed the default outlet library, a university language entry, and a default Search."""
     existing = (
         await db.execute(select(Outlet.id).where(Outlet.user_id == user.id).limit(1))
     ).first()
     if existing is not None:
         return
 
+    # Seed outlets
     outlet_objs: list[Outlet] = []
     for seed in DEFAULT_OUTLETS:
         outlet_objs.append(
@@ -45,26 +43,37 @@ async def seed_user_defaults(db: AsyncSession, user: User) -> None:
     db.add_all(outlet_objs)
     await db.flush()
 
-    # Create a default Search using the default keywords + pages-per-language.
-    search = Search(user_id=user.id, name="Kobe University (default)", is_default=True)
-    db.add(search)
+    # Seed default English university language
+    en_lang = UniversityLanguage(
+        user_id=user.id,
+        iso_code="en",
+        language_label="English",
+        university_name="Kobe University",
+    )
+    db.add(en_lang)
     await db.flush()
-    for lang, term in DEFAULT_KEYWORDS.items():
-        pages = DEFAULT_LANGUAGE_PAGES.get(lang, 0)
-        if not pages:
-            continue
-        db.add(
-            SearchTerm(
-                search_id=search.id,
-                language_code=lang,
-                term=term,
-                pages=pages,
-                is_enabled=True,
-            )
-        )
-    # Link every seeded outlet to the default search.
-    for o in outlet_objs:
-        db.add(SearchOutletLink(search_id=search.id, outlet_id=o.id))
+
+    # Build outlet IDs list
+    outlet_ids = [str(o.id) for o in outlet_objs]
+
+    # Create a default Search with the new config format
+    config = dict(DEFAULT_SEARCH_CONFIG)
+    config["university_name"] = {
+        "enabled": True,
+        "language_ids": [str(en_lang.id)],
+    }
+    config["outlets"] = {
+        "enabled": True,
+        "outlet_ids": outlet_ids,
+    }
+
+    search = Search(
+        user_id=user.id,
+        name="Kobe University (default)",
+        is_default=True,
+        config=config,
+    )
+    db.add(search)
 
 
 async def bootstrap_admin() -> None:
@@ -81,7 +90,6 @@ async def bootstrap_admin() -> None:
             await db.execute(select(User).where(User.email == email))
         ).scalar_one_or_none()
         if clash is not None:
-            # Promote the existing user to admin.
             clash.role = UserRole.admin
             clash.is_active = True
             await db.commit()

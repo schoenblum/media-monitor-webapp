@@ -38,6 +38,7 @@ class User(Base):
     searches = relationship("Search", back_populates="user", cascade="all, delete-orphan")
     outlets = relationship("Outlet", back_populates="user", cascade="all, delete-orphan")
     runs = relationship("Run", back_populates="user", cascade="all, delete-orphan")
+    languages = relationship("UniversityLanguage", back_populates="user", cascade="all, delete-orphan")
     reset_tokens = relationship(
         "PasswordResetToken", back_populates="user", cascade="all, delete-orphan"
     )

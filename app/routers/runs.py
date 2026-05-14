@@ -16,6 +16,7 @@ from app.models.run import Run, RunStatus, RunTrigger
 from app.models.search import Search
 from app.models.user import User
 from app.schemas.run import (
+    BulkDeleteRequest,
     ResultOut,
     ResultSelectionUpdate,
     ResultsPage,
@@ -85,6 +86,12 @@ async def trigger_run(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Configure your Google API credentials in Settings before running a search.",
         )
+    from app.routers.searches import validate_search_config
+    if not validate_search_config(search.config or {}):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Search has no active terms, DOI, or university name — add something to search for.",
+        )
     run = Run(
         user_id=current.id,
         search_id=search.id,
@@ -96,6 +103,57 @@ async def trigger_run(
     await db.refresh(run)
     background.add_task(execute_run, run.id)
     return await _run_to_out(db, run, search_name=search.name)
+
+
+@router.get("/merged", response_model=ResultsPage)
+async def get_merged_results(
+    run_ids: list[UUID] = Query(..., alias="run_ids[]"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(200, ge=1, le=1000),
+    current: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ResultsPage:
+    """Return deduplicated results from multiple runs (temporary merge, not persisted)."""
+    if not run_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No run_ids provided")
+    owned = (
+        await db.execute(
+            select(Run.id).where(Run.id.in_(run_ids), Run.user_id == current.id)
+        )
+    ).scalars().all()
+    owned_set = set(owned)
+    for rid in run_ids:
+        if rid not in owned_set:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail=f"Not authorised for run {rid}"
+            )
+
+    all_results = (
+        await db.execute(
+            select(Result)
+            .where(Result.run_id.in_(run_ids))
+            .order_by(Result.date_extracted.desc(), Result.created_at.asc())
+        )
+    ).scalars().all()
+
+    # Deduplicate by URL, preserving order
+    seen_urls: set[str] = set()
+    deduplicated: list[Result] = []
+    for r in all_results:
+        if r.url not in seen_urls:
+            seen_urls.add(r.url)
+            deduplicated.append(r)
+
+    total = len(deduplicated)
+    start = (page - 1) * page_size
+    page_items = deduplicated[start: start + page_size]
+
+    return ResultsPage(
+        items=[ResultOut.model_validate(r) for r in page_items],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.get("/export")
@@ -239,4 +297,31 @@ async def delete_run(
     if run is None or run.user_id != current.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     await db.delete(run)
+    await db.commit()
+
+
+@router.post("/bulk-delete", status_code=status.HTTP_204_NO_CONTENT)
+async def bulk_delete_runs(
+    payload: BulkDeleteRequest,
+    current: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    if not payload.run_ids:
+        return
+    owned = (
+        await db.execute(
+            select(Run.id).where(Run.id.in_(payload.run_ids), Run.user_id == current.id)
+        )
+    ).scalars().all()
+    owned_set = set(owned)
+    for rid in payload.run_ids:
+        if rid not in owned_set:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail=f"Not authorised for run {rid}"
+            )
+    runs = (
+        await db.execute(select(Run).where(Run.id.in_(payload.run_ids)))
+    ).scalars().all()
+    for run in runs:
+        await db.delete(run)
     await db.commit()

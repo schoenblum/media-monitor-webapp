@@ -1,44 +1,62 @@
-"""Pydantic schemas for searches and search-terms."""
+"""Pydantic schemas for searches — config-based model."""
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-
-from app.services.default_outlets import SUPPORTED_LANGUAGES
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class SearchTermIn(BaseModel):
-    language_code: str
-    term: str
-    pages: int = Field(default=3, ge=1, le=10)
-    is_enabled: bool = True
-
-    @field_validator("language_code")
-    @classmethod
-    def _validate_lang(cls, v: str) -> str:
-        v = v.strip().lower()
-        if v not in SUPPORTED_LANGUAGES:
-            raise ValueError(f"Unsupported language code: {v}")
-        return v
+# ---------------------------------------------------------------------------
+# Search config sub-schemas
+# ---------------------------------------------------------------------------
 
 
-class SearchTermOut(SearchTermIn):
-    model_config = ConfigDict(from_attributes=True)
-    id: UUID
+class SearchTermConfig(BaseModel):
+    id: str = ""
+    text: str = ""
+    operator: Literal["AND", "OR", "NOT"] | None = None
+    pages: int = Field(default=1, ge=1, le=10)
 
 
-class SearchBase(BaseModel):
+class DoiConfig(BaseModel):
+    text: str = ""
+    pages: int = Field(default=1, ge=1, le=10)
+
+
+class UniversityNameConfig(BaseModel):
+    enabled: bool = False
+    language_ids: list[str] = []
+
+
+class OutletsConfig(BaseModel):
+    enabled: bool = False
+    outlet_ids: list[str] = []
+
+
+class SearchConfig(BaseModel):
+    search_window: Literal["last", "hours"] = "last"
+    fallback_hours: int = Field(default=72, ge=1, le=8760)
+    terms: list[SearchTermConfig] = []
+    doi: DoiConfig = Field(default_factory=DoiConfig)
+    university_name: UniversityNameConfig = Field(default_factory=UniversityNameConfig)
+    outlets: OutletsConfig = Field(default_factory=OutletsConfig)
+
+
+# ---------------------------------------------------------------------------
+# Request / response schemas
+# ---------------------------------------------------------------------------
+
+
+class SearchCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     is_default: bool = False
-
-
-class SearchCreate(SearchBase):
-    pass
+    config: SearchConfig = Field(default_factory=SearchConfig)
 
 
 class SearchUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     is_default: bool | None = None
+    config: SearchConfig | None = None
 
 
 class SearchOut(BaseModel):
@@ -46,15 +64,6 @@ class SearchOut(BaseModel):
     id: UUID
     name: str
     is_default: bool
+    config: dict
     created_at: datetime
     updated_at: datetime
-    terms: list[SearchTermOut] = []
-    outlet_ids: list[UUID] = []
-
-
-class TermsReplaceRequest(BaseModel):
-    terms: list[SearchTermIn]
-
-
-class LinkOutletsRequest(BaseModel):
-    outlet_ids: list[UUID]

@@ -20,6 +20,7 @@ class Settings(BaseSettings):
 
     SMTP_HOST: Optional[str] = None
     SMTP_PORT: int = 587
+    SMTP_SSL: bool = False
     SMTP_USER: Optional[str] = None
     SMTP_PASSWORD: Optional[str] = None
     SMTP_FROM: Optional[str] = None

@@ -52,3 +52,7 @@ class ResultsPage(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class BulkDeleteRequest(BaseModel):
+    run_ids: list[UUID]

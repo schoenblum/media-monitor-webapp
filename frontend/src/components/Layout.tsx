@@ -4,11 +4,14 @@ import { useAuth } from "../auth";
 const navItems = [
   { to: "/", label: "Dashboard", end: true },
   { to: "/searches", label: "Searches" },
+  { to: "/languages", label: "Languages" },
   { to: "/outlets", label: "Outlets" },
   { to: "/runs", label: "Run History" },
   { to: "/settings", label: "Settings" },
   { to: "/manual", label: "Manual" },
 ];
+
+const APP_VERSION = "2.0.0";
 
 export default function Layout() {
   const { user, logout } = useAuth();
@@ -90,7 +93,11 @@ export default function Layout() {
         <Outlet />
       </main>
       <footer className="py-6 text-center text-xs text-slate-500">
-        Media Monitor · Kobe University · {new Date().getFullYear()}
+        Media Monitor v{APP_VERSION} &middot;{" "}
+        <a href="mailto:mm@schenz.eu" className="hover:underline">
+          Daniel Schenz
+        </a>{" "}
+        &middot; {new Date().getFullYear()}
       </footer>
     </div>
   );

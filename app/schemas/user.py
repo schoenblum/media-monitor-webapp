@@ -49,6 +49,11 @@ class AdminCreateUserResponse(BaseModel):
     initial_password: str = Field(
         description="Generated initial password — shown ONCE; user must change on first login."
     )
+    email_sent: bool = False
+
+
+class DuplicateUserRequest(BaseModel):
+    email: EmailStr
 
 
 class CredentialsUpdate(BaseModel):

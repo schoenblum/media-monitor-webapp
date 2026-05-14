@@ -1,10 +1,10 @@
-"""Outlet CRUD plus the XLSX bulk import / export endpoints."""
+"""Outlet CRUD plus CSV bulk import / export endpoints."""
+import csv
 import io
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
-from openpyxl import Workbook, load_workbook
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,12 +20,11 @@ from app.schemas.outlet import (
     OutletUpdate,
 )
 from app.schemas.outlet import _clean_domain  # type: ignore[attr-defined]
-from app.services.default_outlets import SUPPORTED_LANGUAGES
 
 
 router = APIRouter(prefix="/outlets", tags=["outlets"])
 
-TEMPLATE_HEADERS = ("name", "domain", "category", "keyword_langs", "notes")
+CSV_HEADERS = ("name", "domain", "category", "keyword_langs", "notes")
 
 
 def _outlet_to_out(o: Outlet) -> OutletOut:
@@ -123,35 +122,32 @@ async def delete_outlet(
 
 
 # ---------------------------------------------------------------------------
-# Import / export
+# CSV import / export
 # ---------------------------------------------------------------------------
 
 
-def _build_template_bytes() -> bytes:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "outlets"
-    ws.append(list(TEMPLATE_HEADERS))
-    # Add one example row so users see the expected shape.
-    ws.append([
+def _build_template_csv() -> bytes:
+    buf = io.StringIO()
+    buf.write("﻿")  # UTF-8 BOM for Excel
+    w = csv.writer(buf, quoting=csv.QUOTE_ALL, lineterminator="\r\n")
+    w.writerow(list(CSV_HEADERS))
+    w.writerow([
         "Example Outlet",
         "example.com",
         "Outstanding international importance",
         "en,de",
         "comma-separated language codes; notes column is ignored on import",
     ])
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return buf.getvalue().encode("utf-8")
 
 
 @router.get("/import/template")
 async def download_import_template(_: User = Depends(get_current_user)) -> StreamingResponse:
-    data = _build_template_bytes()
+    data = _build_template_csv()
     return StreamingResponse(
         io.BytesIO(data),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": 'attachment; filename="outlet_import_template.xlsx"'},
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="outlet_import_template.csv"'},
     )
 
 
@@ -164,25 +160,23 @@ async def export_outlets(
             select(Outlet).where(Outlet.user_id == current.id).order_by(Outlet.name.asc())
         )
     ).scalars().all()
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "outlets"
-    ws.append(list(TEMPLATE_HEADERS))
+    buf = io.StringIO()
+    buf.write("﻿")  # UTF-8 BOM
+    w = csv.writer(buf, quoting=csv.QUOTE_ALL, lineterminator="\r\n")
+    w.writerow(list(CSV_HEADERS))
     for o in rows:
-        ws.append([
+        w.writerow([
             o.name,
             o.domain,
             o.category or "",
             ",".join(o.keyword_langs or []),
             "active" if o.is_active else "inactive",
         ])
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
+    out_bytes = buf.getvalue().encode("utf-8")
     return StreamingResponse(
-        buf,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": 'attachment; filename="outlets_export.xlsx"'},
+        io.BytesIO(out_bytes),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="outlets_export.csv"'},
     )
 
 
@@ -193,27 +187,21 @@ async def import_outlets(
     current: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ImportReport:
-    if not file.filename or not file.filename.lower().endswith(".xlsx"):
+    if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Please upload an .xlsx file"
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Please upload a .csv file"
         )
-    body = await file.read()
-    try:
-        wb = load_workbook(io.BytesIO(body), read_only=True, data_only=True)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Could not parse XLSX: {exc}"
-        ) from exc
-    ws = wb.active
-    if ws is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty workbook")
+    body_bytes = await file.read()
+    # Strip UTF-8 BOM if present
+    body_str = body_bytes.decode("utf-8-sig")
+    reader = csv.reader(io.StringIO(body_str))
 
-    rows_iter = ws.iter_rows(values_only=True)
     try:
-        headers = next(rows_iter)
+        headers_row = next(reader)
     except StopIteration:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No header row")
-    header_map = {str(h).strip().lower() if h else "": i for i, h in enumerate(headers)}
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty CSV file")
+
+    header_map = {h.strip().lower(): i for i, h in enumerate(headers_row)}
     for required in ("name", "domain"):
         if required not in header_map:
             raise HTTPException(
@@ -239,16 +227,18 @@ async def import_outlets(
     imported = 0
     skipped: list[ImportReportRow] = []
 
-    for i, row in enumerate(rows_iter, start=2):  # row 1 is the header
+    for i, row in enumerate(reader, start=2):
         try:
-            name = str(row[header_map["name"]]).strip() if row[header_map["name"]] else ""
-            domain_raw = str(row[header_map["domain"]]).strip() if row[header_map["domain"]] else ""
+            name = row[header_map["name"]].strip() if len(row) > header_map["name"] else ""
+            domain_raw = row[header_map["domain"]].strip() if len(row) > header_map["domain"] else ""
         except IndexError:
             skipped.append(ImportReportRow(row=i, reason="Row too short"))
             continue
+
         if not name or not domain_raw:
             skipped.append(ImportReportRow(row=i, reason="Missing name or domain"))
             continue
+
         domain = _clean_domain(domain_raw)
         if not domain:
             skipped.append(ImportReportRow(row=i, reason="Invalid domain"))
@@ -258,25 +248,16 @@ async def import_outlets(
             continue
 
         category = None
-        if "category" in header_map and row[header_map["category"]]:
-            category = str(row[header_map["category"]]).strip() or None
+        if "category" in header_map and len(row) > header_map["category"]:
+            category = row[header_map["category"]].strip() or None
+
         langs: list[str] = []
-        if "keyword_langs" in header_map and row[header_map["keyword_langs"]]:
-            raw_langs = str(row[header_map["keyword_langs"]])
-            lang_error = False
+        if "keyword_langs" in header_map and len(row) > header_map["keyword_langs"]:
+            raw_langs = row[header_map["keyword_langs"]]
             for token in raw_langs.replace(";", ",").split(","):
                 t = token.strip().lower()
-                if not t:
-                    continue
-                if t not in SUPPORTED_LANGUAGES:
-                    skipped.append(ImportReportRow(row=i, reason=f"Unsupported language code: {t}"))
-                    lang_error = True
-                    break
-                langs.append(t)
-            if lang_error:
-                continue
-        if not langs:
-            langs = ["en"]
+                if t:
+                    langs.append(t)
 
         db.add(
             Outlet(

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, downloadBlob } from "../api/client";
-import type { ImportReport, Outlet, Lang } from "../api/types";
-import { LANG_LABELS, SUPPORTED_LANGS } from "../api/types";
+import type { ImportReport, Outlet, UniversityLanguage } from "../api/types";
 import { Spinner } from "../components/Spinner";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 
@@ -9,6 +8,7 @@ type SortKey = "name" | "domain" | "category" | "is_active";
 
 export default function Outlets() {
   const [outlets, setOutlets] = useState<Outlet[]>([]);
+  const [languages, setLanguages] = useState<UniversityLanguage[]>([]);
   const [loading, setLoading] = useState(true);
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
@@ -17,8 +17,8 @@ export default function Outlets() {
     name: string;
     domain: string;
     category: string;
-    keyword_langs: Lang[];
-  }>({ name: "", domain: "", category: "", keyword_langs: ["en"] });
+    keyword_langs: string[];
+  }>({ name: "", domain: "", category: "", keyword_langs: [] });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<Outlet | null>(null);
   const [deleting, setDeleting] = useState<Outlet | null>(null);
@@ -29,7 +29,12 @@ export default function Outlets() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    refresh();
+    (async () => {
+      const [outs, langs] = await Promise.all([api.listOutlets(), api.listLanguages()]);
+      setOutlets(outs);
+      setLanguages(langs);
+      setLoading(false);
+    })();
   }, []);
 
   async function refresh() {
@@ -79,7 +84,7 @@ export default function Outlets() {
         is_active: true,
       });
       setOutlets((prev) => [...prev, created]);
-      setNewOutlet({ name: "", domain: "", category: "", keyword_langs: ["en"] });
+      setNewOutlet({ name: "", domain: "", category: "", keyword_langs: [] });
     } catch (e) {
       alert(e instanceof Error ? e.message : "Add failed");
     }
@@ -136,19 +141,19 @@ export default function Outlets() {
 
   async function downloadTemplate() {
     const blob = await api.downloadImportTemplate();
-    downloadBlob(blob, "outlet_import_template.xlsx");
+    downloadBlob(blob, "outlet_import_template.csv");
   }
 
-  async function exportXlsx() {
+  async function exportCsv() {
     const blob = await api.exportOutlets();
-    downloadBlob(blob, "outlets_export.xlsx");
+    downloadBlob(blob, "outlets_export.csv");
   }
 
   return (
     <div className="space-y-4">
       <div className="card p-4">
         <h2 className="text-base font-semibold">Add outlet</h2>
-        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[1.2fr_1.4fr_1fr_1.2fr_auto]">
+        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[1.2fr_1.4fr_1fr_1.4fr_auto]">
           <input
             className="input"
             placeholder="Name"
@@ -169,6 +174,7 @@ export default function Outlets() {
           />
           <LangsPicker
             value={newOutlet.keyword_langs}
+            languages={languages}
             onChange={(v) => setNewOutlet({ ...newOutlet, keyword_langs: v })}
           />
           <button className="btn-primary" onClick={addOutlet}>
@@ -197,17 +203,17 @@ export default function Outlets() {
           <input
             ref={fileRef}
             type="file"
-            accept=".xlsx"
+            accept=".csv"
             className="hidden"
             onChange={onPickFile}
           />
           <button className="btn-secondary" onClick={() => fileRef.current?.click()}>
-            Upload XLSX
+            Upload CSV
           </button>
           <button className="btn-ghost" onClick={downloadTemplate}>
             Template
           </button>
-          <button className="btn-ghost" onClick={exportXlsx}>
+          <button className="btn-ghost" onClick={exportCsv}>
             Export
           </button>
         </div>
@@ -262,6 +268,7 @@ export default function Outlets() {
               )}
               {sorted.map((o) => {
                 const editing = editingId === o.id && editDraft;
+                const noLang = (o.keyword_langs || []).length === 0;
                 return (
                   <tr key={o.id} className="border-t border-slate-100">
                     {editing ? (
@@ -290,6 +297,7 @@ export default function Outlets() {
                         <td className="py-1 pr-2">
                           <LangsPicker
                             value={editDraft!.keyword_langs}
+                            languages={languages}
                             onChange={(v) => setEditDraft({ ...editDraft!, keyword_langs: v })}
                           />
                         </td>
@@ -308,10 +316,7 @@ export default function Outlets() {
                           </button>
                           <button
                             className="btn-secondary"
-                            onClick={() => {
-                              setEditingId(null);
-                              setEditDraft(null);
-                            }}
+                            onClick={() => { setEditingId(null); setEditDraft(null); }}
                           >
                             Cancel
                           </button>
@@ -323,7 +328,13 @@ export default function Outlets() {
                         <td className="py-1.5 pr-2 text-slate-600">{o.domain}</td>
                         <td className="py-1.5 pr-2 text-slate-600">{o.category}</td>
                         <td className="py-1.5 pr-2 text-xs text-slate-600">
-                          {(o.keyword_langs || []).map((l) => l.toUpperCase()).join(", ")}
+                          {noLang ? (
+                            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-700" title="No language set — included in all language queries">
+                              all langs
+                            </span>
+                          ) : (
+                            (o.keyword_langs || []).map((l) => l.toUpperCase()).join(", ")
+                          )}
                         </td>
                         <td className="py-1.5 pr-2">
                           <button
@@ -336,10 +347,7 @@ export default function Outlets() {
                         <td className="py-1.5 text-right">
                           <button
                             className="btn-ghost mr-1"
-                            onClick={() => {
-                              setEditingId(o.id);
-                              setEditDraft({ ...o });
-                            }}
+                            onClick={() => { setEditingId(o.id); setEditDraft({ ...o }); }}
                           >
                             Edit
                           </button>
@@ -388,10 +396,7 @@ export default function Outlets() {
         }
         confirmLabel="Replace all"
         danger
-        onCancel={() => {
-          setConfirmReplaceOpen(false);
-          setImportPending(null);
-        }}
+        onCancel={() => { setConfirmReplaceOpen(false); setImportPending(null); }}
         onConfirm={() => {
           if (importPending) doImport(importPending, "replace");
           setConfirmReplaceOpen(false);
@@ -426,28 +431,45 @@ function Th({
   );
 }
 
-function LangsPicker({ value, onChange }: { value: Lang[]; onChange: (v: Lang[]) => void }) {
+function LangsPicker({
+  value,
+  languages,
+  onChange,
+}: {
+  value: string[];
+  languages: UniversityLanguage[];
+  onChange: (v: string[]) => void;
+}) {
   const set = new Set(value);
+
+  if (languages.length === 0) {
+    return (
+      <div className="text-xs text-slate-400 italic py-1">
+        No languages defined
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-wrap gap-1">
-      {SUPPORTED_LANGS.map((l) => {
-        const on = set.has(l);
+      {languages.map((lang) => {
+        const on = set.has(lang.iso_code);
         return (
           <button
-            key={l}
+            key={lang.id}
             type="button"
             onClick={() => {
               const next = new Set(value);
-              if (on) next.delete(l);
-              else next.add(l);
-              onChange([...next] as Lang[]);
+              if (on) next.delete(lang.iso_code);
+              else next.add(lang.iso_code);
+              onChange([...next]);
             }}
-            title={LANG_LABELS[l]}
+            title={lang.language_label}
             className={`rounded-md px-2 py-0.5 text-xs ring-1 ring-inset ${
               on ? "bg-brand text-white ring-brand" : "bg-white text-slate-700 ring-slate-300"
             }`}
           >
-            {l.toUpperCase()}
+            {lang.iso_code.toUpperCase()}
           </button>
         );
       })}

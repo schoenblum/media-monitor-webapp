@@ -5,9 +5,9 @@ import type {
   ResultsPage,
   Run,
   Search,
-  SearchTerm,
+  SearchConfig,
+  UniversityLanguage,
   User,
-  Lang,
   UUID,
   RunStatus,
 } from "./types";
@@ -66,7 +66,6 @@ async function request<T>(
     throw new ApiError(resp.status, body, message);
   }
   if (ct.includes("application/json")) return (await resp.json()) as T;
-  // For text/CSV/XLSX endpoints the caller is expected to use fetchBlob.
   return (await resp.text()) as unknown as T;
 }
 
@@ -91,10 +90,6 @@ export function downloadBlob(blob: Blob, filename: string): void {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
-
-// ---------------------------------------------------------------------------
-// Auth
-// ---------------------------------------------------------------------------
 
 export const api = {
   // Auth
@@ -142,36 +137,39 @@ export const api = {
   // Users (admin)
   listUsers: () => request<User[]>("/users"),
   createUser: (email: string, role: "admin" | "user") =>
-    request<{ user: User; initial_password: string }>("/users", {
+    request<{ user: User; initial_password: string; email_sent: boolean }>("/users", {
       method: "POST",
       body: JSON.stringify({ email, role }),
     }),
   updateUser: (id: UUID, payload: { is_active?: boolean; role?: "admin" | "user" }) =>
     request<User>(`/users/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteUser: (id: UUID) => request<void>(`/users/${id}`, { method: "DELETE" }),
+  duplicateUser: (id: UUID, email: string) =>
+    request<{ user: User; initial_password: string; email_sent: boolean }>(`/users/${id}/duplicate`, {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+
+  // University Languages
+  listLanguages: () => request<UniversityLanguage[]>("/languages"),
+  createLanguage: (payload: { iso_code: string; language_label: string; university_name: string }) =>
+    request<UniversityLanguage>("/languages", { method: "POST", body: JSON.stringify(payload) }),
+  updateLanguage: (id: UUID, payload: { iso_code?: string; language_label?: string; university_name?: string }) =>
+    request<UniversityLanguage>(`/languages/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
+  deleteLanguage: (id: UUID) => request<void>(`/languages/${id}`, { method: "DELETE" }),
 
   // Searches
   listSearches: () => request<Search[]>("/searches"),
   getSearch: (id: UUID) => request<Search>(`/searches/${id}`),
   createSearch: (name: string, is_default = false) =>
     request<Search>("/searches", { method: "POST", body: JSON.stringify({ name, is_default }) }),
-  updateSearch: (id: UUID, payload: { name?: string; is_default?: boolean }) =>
+  updateSearch: (id: UUID, payload: { name?: string; is_default?: boolean; config?: SearchConfig }) =>
     request<Search>(`/searches/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
   deleteSearch: (id: UUID) => request<void>(`/searches/${id}`, { method: "DELETE" }),
-  replaceTerms: (id: UUID, terms: SearchTerm[]) =>
-    request<SearchTerm[]>(`/searches/${id}/terms`, {
-      method: "PUT",
-      body: JSON.stringify({ terms }),
-    }),
-  linkOutlets: (id: UUID, outlet_ids: UUID[]) =>
-    request<void>(`/searches/${id}/outlets`, {
-      method: "POST",
-      body: JSON.stringify({ outlet_ids }),
-    }),
 
   // Outlets
   listOutlets: () => request<Outlet[]>("/outlets"),
-  createOutlet: (payload: { name: string; domain: string; category?: string | null; keyword_langs: Lang[]; is_active?: boolean }) =>
+  createOutlet: (payload: { name: string; domain: string; category?: string | null; keyword_langs: string[]; is_active?: boolean }) =>
     request<Outlet>("/outlets", { method: "POST", body: JSON.stringify(payload) }),
   updateOutlet: (id: UUID, payload: Partial<Omit<Outlet, "id" | "created_at">>) =>
     request<Outlet>(`/outlets/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
@@ -207,16 +205,28 @@ export const api = {
     const qs = q.toString();
     return request<ResultsPage>(`/runs/${id}/results${qs ? `?${qs}` : ""}`);
   },
+  getMergedResults: (
+    run_ids: UUID[],
+    params?: { page?: number; page_size?: number },
+  ) => {
+    const q = new URLSearchParams();
+    run_ids.forEach((id) => q.append("run_ids[]", id));
+    if (params?.page) q.set("page", String(params.page));
+    if (params?.page_size) q.set("page_size", String(params.page_size));
+    return request<ResultsPage>(`/runs/merged?${q.toString()}`);
+  },
   setResultsSelection: (id: UUID, result_ids: UUID[], selected: boolean) =>
     request<void>(`/runs/${id}/results`, {
       method: "PATCH",
       body: JSON.stringify({ result_ids, selected }),
     }),
   deleteRun: (id: UUID) => request<void>(`/runs/${id}`, { method: "DELETE" }),
+  bulkDeleteRuns: (run_ids: UUID[]) =>
+    request<void>("/runs/bulk-delete", { method: "POST", body: JSON.stringify({ run_ids }) }),
   exportRuns: (run_ids: UUID[]) => {
     const params = run_ids.map((r) => `run_ids[]=${encodeURIComponent(r)}`).join("&");
     return fetchBlob(`/runs/export?${params}`);
   },
 };
 
-export type { Outlet, Result, Run, Search, SearchTerm, User, ResultsPage };
+export type { Outlet, Result, Run, Search, UniversityLanguage, User, ResultsPage };

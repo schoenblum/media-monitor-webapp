@@ -1,0 +1,2 @@
+name,domain,category,keyword_langs,notes
+Example Outlet,example.com,Outstanding international importance,"en,de","comma-separated language codes; notes column is ignored on import"

@@ -6,6 +6,7 @@ import Login from "./pages/Login";
 import ChangePassword from "./pages/ChangePassword";
 import Dashboard from "./pages/Dashboard";
 import Searches from "./pages/Searches";
+import Languages from "./pages/Languages";
 import Outlets from "./pages/Outlets";
 import RunHistory from "./pages/RunHistory";
 import RunDetail from "./pages/RunDetail";
@@ -55,6 +56,7 @@ export default function App() {
         >
           <Route index element={<Dashboard />} />
           <Route path="searches" element={<Searches />} />
+          <Route path="languages" element={<Languages />} />
           <Route path="outlets" element={<Outlets />} />
           <Route path="runs" element={<RunHistory />} />
           <Route path="runs/:id" element={<RunDetail />} />

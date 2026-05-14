@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.bootstrap import bootstrap_admin
 from app.config import get_settings
-from app.routers import auth, outlets, runs, searches, users, webhook
+from app.routers import auth, languages, outlets, runs, searches, users, webhook
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI):  # noqa: D401
     yield
 
 
-app = FastAPI(title="Media Monitor", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Media Monitor", version="2.0.0", lifespan=lifespan)
 
 
 @app.get("/api/v1/health", tags=["health"])
@@ -46,6 +46,7 @@ app.include_router(searches.router, prefix="/api/v1")
 app.include_router(outlets.router, prefix="/api/v1")
 app.include_router(runs.router, prefix="/api/v1")
 app.include_router(webhook.router, prefix="/api/v1")
+app.include_router(languages.router, prefix="/api/v1")
 
 
 # Mount the SPA build (if present). All non-API GETs that don't match a file fall

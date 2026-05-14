@@ -1,32 +1,30 @@
-"""Core search-engine logic.
+"""Core search-engine logic — config-based query builder.
 
-Ported from ``media_monitor_v38a.txt`` and made async + multi-tenant.
+Each Run calls ``execute_run`` in the background:
 
-Each Run executes ``execute_run`` in the background:
-
-1. Loads the Search (including terms + linked outlets) and the user's encrypted
-   Google credentials.
-2. Computes ``days_since`` from the most recent prior Run for the same Search.
-3. For each linked, active outlet, and for each enabled term in the outlet's
-   ``keyword_langs``, issues paginated Google CSE queries.
-4. Persists every new ``Result`` row as it is found; on quota / HTTP 429,
-   marks the run failed and returns early with all results saved.
+1. Loads the Search's config JSON and the user's encrypted Google credentials.
+2. Resolves outlet and university-language records referenced in the config.
+3. Builds a list of (query_string, pages, applicable_outlets) tuples.
+4. Executes paginated Google CSE requests and deduplicates by URL.
+5. Commits Result rows as they arrive; marks the Run complete/failed on exit.
 """
 import asyncio
 import logging
 from datetime import datetime, timezone
+from math import ceil
+from typing import NamedTuple
 from uuid import UUID
 
 import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.database import SessionLocal
-from app.models.outlet import Outlet, SearchOutletLink
+from app.models.language import UniversityLanguage
+from app.models.outlet import Outlet
 from app.models.result import Result
 from app.models.run import Run, RunStatus
-from app.models.search import Search, SearchTerm
+from app.models.search import Search
 from app.models.user import User
 from app.services.crypto import decrypt
 from app.services.date_extractor import extract_date
@@ -38,24 +36,164 @@ logger = logging.getLogger(__name__)
 
 GOOGLE_CSE_URL = "https://www.googleapis.com/customsearch/v1"
 API_CALL_DELAY_SECONDS = 0.5
-DEFAULT_LOOKBACK_DAYS = 7
+DEFAULT_LOOKBACK_HOURS = 72
 MAX_PAGES = 10
 
 
-def _is_excluded_url(url: str, user_outlet_domains: set[str]) -> bool:
-    """Drop social-media URLs and any URL pointing at one of the user's own outlets
-    via the same host as a different outlet (we already de-dupe by URL string)."""
-    url_lower = url.lower()
-    return any(d in url_lower for d in EXCLUDED_DOMAINS)
+class QuerySpec(NamedTuple):
+    query: str
+    pages: int
+    outlets: list  # list of Outlet objects; empty = no site restriction
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
 def _normalise_domain(domain: str) -> str:
-    """Strip protocol / trailing slash / 'site:' prefix from an outlet domain."""
     d = domain.strip().lower()
     for prefix in ("https://", "http://", "site:"):
         if d.startswith(prefix):
             d = d[len(prefix):]
     return d.rstrip("/")
+
+
+def _is_excluded_url(url: str) -> bool:
+    url_lower = url.lower()
+    return any(d in url_lower for d in EXCLUDED_DOMAINS)
+
+
+def _build_term_query(terms: list[dict]) -> str | None:
+    """Combine term rows into a single Google query string using Google boolean syntax."""
+    parts: list[str] = []
+    for term in terms:
+        text = term.get("text", "").strip()
+        if not text:
+            continue
+        quoted = f'"{text}"'
+        if not parts:
+            parts.append(quoted)
+        else:
+            op = (term.get("operator") or "AND").upper()
+            if op == "OR":
+                parts.append(f"OR {quoted}")
+            elif op == "NOT":
+                parts.append(f"-{quoted}")
+            else:  # AND — adjacent quoted phrases are AND in Google
+                parts.append(quoted)
+    return " ".join(parts) if parts else None
+
+
+def _build_query_specs(
+    config: dict,
+    all_outlets: list,
+    languages: dict,
+) -> list[QuerySpec]:
+    """Convert a search config dict into a list of QuerySpec to execute."""
+    specs: list[QuerySpec] = []
+
+    terms = config.get("terms", [])
+    doi_cfg = config.get("doi", {})
+    uni_cfg = config.get("university_name", {})
+    outlets_cfg = config.get("outlets", {})
+
+    # Resolve outlets
+    outlets_enabled = outlets_cfg.get("enabled", False)
+    outlet_id_set = set(str(oid) for oid in outlets_cfg.get("outlet_ids", []))
+    active_outlets = (
+        [o for o in all_outlets if str(o.id) in outlet_id_set and o.is_active]
+        if outlets_enabled
+        else []
+    )
+
+    # Base terms query
+    base_query = _build_term_query(terms)
+    base_pages = max(
+        (t.get("pages", 1) for t in terms if t.get("text", "").strip()),
+        default=1,
+    )
+
+    # DOI query
+    doi_text = doi_cfg.get("text", "").strip()
+    doi_pages = doi_cfg.get("pages", 1)
+
+    # Collect base queries (terms and DOI)
+    base_queries: list[tuple[str, int]] = []
+    if base_query:
+        base_queries.append((base_query, base_pages))
+    if doi_text:
+        base_queries.append((f'"{doi_text}"', doi_pages))
+
+    # University name queries
+    uni_enabled = uni_cfg.get("enabled", False)
+    uni_lang_ids = [str(lid) for lid in uni_cfg.get("language_ids", [])]
+
+    for q, pages in base_queries:
+        if outlets_enabled and active_outlets:
+            specs.append(QuerySpec(query=q, pages=pages, outlets=list(active_outlets)))
+        else:
+            specs.append(QuerySpec(query=q, pages=pages, outlets=[]))
+
+    if uni_enabled and uni_lang_ids:
+        for lang_id in uni_lang_ids:
+            lang = languages.get(lang_id)
+            if not lang:
+                continue
+            iso = lang.iso_code
+            uni_name = lang.university_name
+
+            # Append university name to the base term query (if any) or use alone
+            if base_query:
+                uni_q = f'{base_query} "{uni_name}"'
+            else:
+                uni_q = f'"{uni_name}"'
+
+            # If DOI is set, treat it as a separate query alongside university name
+            if doi_text:
+                doi_uni_q = f'"{doi_text}" "{uni_name}"'
+                doi_outlets = _filter_outlets_by_lang(active_outlets, iso) if outlets_enabled else []
+                specs.append(QuerySpec(query=doi_uni_q, pages=doi_pages, outlets=doi_outlets))
+
+            applicable = _filter_outlets_by_lang(active_outlets, iso) if outlets_enabled else []
+            specs.append(QuerySpec(query=uni_q, pages=1, outlets=applicable))
+
+    return specs
+
+
+def _filter_outlets_by_lang(outlets: list, iso_code: str) -> list:
+    """Return outlets that have no language restriction or include this ISO code."""
+    return [o for o in outlets if not o.keyword_langs or iso_code in o.keyword_langs]
+
+
+async def _compute_lookback(
+    db: AsyncSession, search_id: UUID, current_run_id: UUID, config: dict
+) -> int:
+    """Return the lookback window in days based on the search config."""
+    from app.models.run import RunStatus as RS
+
+    search_window = config.get("search_window", "last")
+    fallback_hours = int(config.get("fallback_hours", DEFAULT_LOOKBACK_HOURS))
+
+    if search_window == "hours":
+        return max(1, ceil(fallback_hours / 24))
+
+    # "last" — find most recent prior completed run for this search
+    stmt = (
+        select(Run.started_at)
+        .where(Run.search_id == search_id)
+        .where(Run.id != current_run_id)
+        .where(Run.status == RS.complete)
+        .order_by(Run.started_at.desc())
+        .limit(1)
+    )
+    prev_started: datetime | None = (await db.execute(stmt)).scalar_one_or_none()
+    if prev_started is None:
+        return max(1, ceil(fallback_hours / 24))
+    now = datetime.now(timezone.utc)
+    if prev_started.tzinfo is None:
+        prev_started = prev_started.replace(tzinfo=timezone.utc)
+    return max(1, (now - prev_started).days + 1)
 
 
 async def _fetch_page(
@@ -66,7 +204,6 @@ async def _fetch_page(
     start: int,
     days: int,
 ) -> tuple[list[dict], bool, str | None]:
-    """Fetch one CSE page. Returns ``(items, quota_hit, error_message)``."""
     params = {
         "key": api_key,
         "cx": engine_id,
@@ -98,32 +235,12 @@ async def _fetch_page(
     return payload.get("items", []) or [], False, None
 
 
-async def _compute_lookback_days(db: AsyncSession, search_id: UUID, current_run_id: UUID) -> int:
-    """Days between the most recent *prior* completed run of this Search and now."""
-    stmt = (
-        select(Run.started_at)
-        .where(Run.search_id == search_id)
-        .where(Run.id != current_run_id)
-        .where(Run.status == RunStatus.complete)
-        .order_by(Run.started_at.desc())
-        .limit(1)
-    )
-    res = await db.execute(stmt)
-    prev_started: datetime | None = res.scalar_one_or_none()
-    if prev_started is None:
-        return DEFAULT_LOOKBACK_DAYS
-    now = datetime.now(timezone.utc)
-    if prev_started.tzinfo is None:
-        prev_started = prev_started.replace(tzinfo=timezone.utc)
-    return max(1, (now - prev_started).days)
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
 
 
 async def execute_run(run_id: UUID) -> None:
-    """Run a search in the background. Opens its own DB session.
-
-    Always commits a final status (``complete`` or ``failed``) and never raises.
-    Partial results collected before a quota / fatal error are preserved.
-    """
     async with SessionLocal() as db:
         try:
             await _execute_run_inner(run_id, db)
@@ -151,16 +268,9 @@ async def _execute_run_inner(run_id: UUID, db: AsyncSession) -> None:
     run.status = RunStatus.running
     await db.commit()
 
-    # Load the search with terms + linked outlets.
-    stmt = (
-        select(Search)
-        .where(Search.id == run.search_id)
-        .options(
-            selectinload(Search.terms),
-            selectinload(Search.outlet_links).selectinload(SearchOutletLink.outlet),
-        )
-    )
-    search = (await db.execute(stmt)).scalar_one_or_none()
+    search = (
+        await db.execute(select(Search).where(Search.id == run.search_id))
+    ).scalar_one_or_none()
     if search is None:
         await _mark_failed(db, run_id, "Search not found")
         return
@@ -171,11 +281,7 @@ async def _execute_run_inner(run_id: UUID, db: AsyncSession) -> None:
         return
 
     if not user.google_api_key_encrypted or not user.search_engine_id_encrypted:
-        await _mark_failed(
-            db,
-            run_id,
-            "Google API credentials not configured. Add them in Settings.",
-        )
+        await _mark_failed(db, run_id, "Google API credentials not configured. Add them in Settings.")
         return
 
     try:
@@ -185,48 +291,98 @@ async def _execute_run_inner(run_id: UUID, db: AsyncSession) -> None:
         await _mark_failed(db, run_id, f"Failed to decrypt API credentials: {exc}")
         return
 
-    # Build lookup: language → (term, pages, enabled).
-    terms_by_lang: dict[str, SearchTerm] = {t.language_code: t for t in search.terms}
+    config = search.config or {}
 
-    # Active outlets linked to this search.
-    outlets: list[Outlet] = [
-        link.outlet for link in search.outlet_links if link.outlet and link.outlet.is_active
-    ]
-    user_outlet_domains = {_normalise_domain(o.domain) for o in outlets}
+    # Validate that there is something to search for
+    from app.routers.searches import validate_search_config
+    if not validate_search_config(config):
+        await _mark_failed(
+            db,
+            run_id,
+            "Search has no active terms, DOI, or university name — nothing to search for.",
+        )
+        return
 
-    if not outlets:
+    # Load all user outlets
+    all_outlets = (
+        await db.execute(select(Outlet).where(Outlet.user_id == run.user_id))
+    ).scalars().all()
+
+    # Load user's university languages
+    lang_rows = (
+        await db.execute(
+            select(UniversityLanguage).where(UniversityLanguage.user_id == run.user_id)
+        )
+    ).scalars().all()
+    languages = {str(lang.id): lang for lang in lang_rows}
+
+    days = await _compute_lookback(db, search.id, run.id, config)
+    specs = _build_query_specs(config, list(all_outlets), languages)
+
+    if not specs:
         run.status = RunStatus.complete
         run.completed_at = datetime.now(timezone.utc)
-        run.error_message = "No active outlets linked to this search."
+        run.error_message = "No queries could be built from the search configuration."
         await db.commit()
         return
 
-    days_since = await _compute_lookback_days(db, search.id, run.id)
     seen_urls: set[str] = set()
     api_calls_used = 0
     quota_hit = False
     last_error: str | None = None
 
     async with httpx.AsyncClient() as client:
-        for outlet in outlets:
+        for spec in specs:
             if quota_hit:
                 break
 
-            domain = _normalise_domain(outlet.domain)
-            for lang in outlet.keyword_langs or []:
-                if quota_hit:
-                    break
-                term_row = terms_by_lang.get(lang)
-                if term_row is None or not term_row.is_enabled or not term_row.term.strip():
-                    continue
-                pages = max(1, min(MAX_PAGES, term_row.pages))
-                keyword = term_row.term.strip()
-                query = f'"{keyword}" site:{domain}'
+            pages = max(1, min(MAX_PAGES, spec.pages))
 
+            if spec.outlets:
+                # Run the query against each outlet domain
+                for outlet in spec.outlets:
+                    if quota_hit:
+                        break
+                    domain = _normalise_domain(outlet.domain)
+                    full_query = f"{spec.query} site:{domain}"
+                    for page in range(pages):
+                        start = page * 10 + 1
+                        items, quota, err = await _fetch_page(
+                            client, api_key, engine_id, full_query, start, days
+                        )
+                        api_calls_used += 1
+
+                        if quota:
+                            quota_hit = True
+                            last_error = err
+                            break
+                        if err:
+                            last_error = err
+                            logger.warning(
+                                "Query '%s' outlet=%s page=%d: %s",
+                                spec.query[:60], outlet.name, page + 1, err,
+                            )
+                            break
+                        if not items:
+                            break
+
+                        new_rows = _make_result_rows(
+                            items, run.id, outlet.name, spec.query, seen_urls
+                        )
+                        if new_rows:
+                            db.add_all(new_rows)
+
+                        run.api_calls_used = api_calls_used
+                        await db.commit()
+                        await asyncio.sleep(API_CALL_DELAY_SECONDS)
+            else:
+                # Bare search without site: restriction
                 for page in range(pages):
+                    if quota_hit:
+                        break
                     start = page * 10 + 1
                     items, quota, err = await _fetch_page(
-                        client, api_key, engine_id, query, start, days_since
+                        client, api_key, engine_id, spec.query, start, days
                     )
                     api_calls_used += 1
 
@@ -236,39 +392,14 @@ async def _execute_run_inner(run_id: UUID, db: AsyncSession) -> None:
                         break
                     if err:
                         last_error = err
-                        logger.warning(
-                            "Outlet %s lang=%s page=%d: %s", outlet.name, lang, page + 1, err
-                        )
+                        logger.warning("Query '%s' page=%d: %s", spec.query[:60], page + 1, err)
                         break
                     if not items:
                         break
 
-                    new_rows = []
-                    for item in items:
-                        url = item.get("link", "")
-                        if not url or url in seen_urls:
-                            continue
-                        if _is_excluded_url(url, user_outlet_domains):
-                            continue
-                        seen_urls.add(url)
-                        title = item.get("title", "No title")
-                        snippet = item.get("snippet", "") or ""
-                        dl_code, dl_name = detect_language(title, snippet)
-                        new_rows.append(
-                            Result(
-                                run_id=run.id,
-                                outlet_name=outlet.name,
-                                title=title,
-                                url=url,
-                                display_source=item.get("displayLink", "") or "",
-                                snippet=snippet,
-                                date_extracted=extract_date(snippet),
-                                keyword_used=keyword,
-                                search_lang=lang,
-                                detected_lang=dl_code,
-                                detected_lang_name=dl_name,
-                            )
-                        )
+                    new_rows = _make_result_rows(
+                        items, run.id, "Web", spec.query, seen_urls
+                    )
                     if new_rows:
                         db.add_all(new_rows)
 
@@ -283,5 +414,41 @@ async def _execute_run_inner(run_id: UUID, db: AsyncSession) -> None:
         run.error_message = last_error or "Google CSE quota exceeded."
     else:
         run.status = RunStatus.complete
-        run.error_message = last_error  # non-fatal page errors, if any
+        run.error_message = last_error
     await db.commit()
+
+
+def _make_result_rows(
+    items: list[dict],
+    run_id: UUID,
+    outlet_name: str,
+    keyword_used: str,
+    seen_urls: set[str],
+) -> list[Result]:
+    rows: list[Result] = []
+    for item in items:
+        url = item.get("link", "")
+        if not url or url in seen_urls:
+            continue
+        if _is_excluded_url(url):
+            continue
+        seen_urls.add(url)
+        title = item.get("title", "No title")
+        snippet = item.get("snippet", "") or ""
+        dl_code, dl_name = detect_language(title, snippet)
+        rows.append(
+            Result(
+                run_id=run_id,
+                outlet_name=outlet_name,
+                title=title,
+                url=url,
+                display_source=item.get("displayLink", "") or "",
+                snippet=snippet,
+                date_extracted=extract_date(snippet),
+                keyword_used=keyword_used[:255],
+                search_lang="",
+                detected_lang=dl_code,
+                detected_lang_name=dl_name,
+            )
+        )
+    return rows

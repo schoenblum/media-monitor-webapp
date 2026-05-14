@@ -5,10 +5,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.services.default_outlets import SUPPORTED_LANGUAGES
 
-
-_DOMAIN_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+(/[a-z0-9._~%/-]*)?$")
+_DOMAIN_RE = re.compile(
+    r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+(/[a-z0-9._~%/-]*)?$"
+)
+_LANG_RE = re.compile(r"^[a-z]{2,3}(-[a-zA-Z0-9]{2,8})*$")
 
 
 def _clean_domain(raw: str) -> str:
@@ -40,9 +41,10 @@ class OutletBase(BaseModel):
         out = []
         for code in v:
             c = code.strip().lower()
-            if c not in SUPPORTED_LANGUAGES:
-                raise ValueError(f"Unsupported language code: {code}")
-            out.append(c)
+            if c and not _LANG_RE.match(c):
+                raise ValueError(f"Invalid language code: {code}")
+            if c:
+                out.append(c)
         return out
 
 
@@ -67,9 +69,10 @@ class OutletUpdate(BaseModel):
         out = []
         for code in v:
             c = code.strip().lower()
-            if c not in SUPPORTED_LANGUAGES:
-                raise ValueError(f"Unsupported language code: {code}")
-            out.append(c)
+            if c and not _LANG_RE.match(c):
+                raise ValueError(f"Invalid language code: {code}")
+            if c:
+                out.append(c)
         return out
 
 
