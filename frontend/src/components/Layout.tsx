@@ -11,7 +11,7 @@ const navItems = [
   { to: "/manual", label: "Manual" },
 ];
 
-const APP_VERSION = "2.0.0";
+const APP_VERSION = "2.1.0";
 
 export default function Layout() {
   const { user, logout } = useAuth();
@@ -93,9 +93,9 @@ export default function Layout() {
         <Outlet />
       </main>
       <footer className="py-6 text-center text-xs text-slate-500">
-        Media Monitor v{APP_VERSION} &middot;{" "}
+        Media Monitor v{APP_VERSION} &middot; Daniel Schenz &middot;{" "}
         <a href="mailto:mm@schenz.eu" className="hover:underline">
-          Daniel Schenz
+          mm@schenz.eu
         </a>{" "}
         &middot; {new Date().getFullYear()}
       </footer>

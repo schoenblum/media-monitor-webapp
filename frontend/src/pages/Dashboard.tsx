@@ -105,23 +105,21 @@ export default function Dashboard() {
         />
       </div>
 
-      <div className="card p-5">
-        <div className="flex flex-wrap items-center gap-2">
-          <h2 className="flex-1 text-base font-semibold">Quick actions</h2>
+      <div className="card flex flex-wrap items-center gap-3 p-5">
+        <div className="flex-1 min-w-0">
+          <div className="text-xs uppercase tracking-wide text-slate-500">Default search</div>
+          <div className="mt-0.5 text-base font-semibold truncate">
+            {defaultSearch ? defaultSearch.name : "No default search configured"}
+          </div>
         </div>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button
-            disabled={!defaultSearch || running !== null}
-            onClick={runDefault}
-            className="btn-primary"
-            title={defaultSearch ? `Run "${defaultSearch.name}"` : "Create a default search first"}
-          >
-            {running && <Spinner />} Run default search
-          </button>
-          <Link to="/searches" className="btn-secondary">Searches</Link>
-          <Link to="/outlets" className="btn-secondary">Outlets</Link>
-          <Link to="/settings" className="btn-secondary">Settings</Link>
-        </div>
+        <button
+          disabled={!defaultSearch || running !== null}
+          onClick={runDefault}
+          className="btn-primary"
+          title={defaultSearch ? `Run "${defaultSearch.name}"` : "Create a default search first"}
+        >
+          {running && <Spinner />} Run default search
+        </button>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

@@ -1,6 +1,12 @@
 import type {
   ImportReport,
+  LanguageCommitReport,
+  LanguageCommitRequest,
+  LanguagePreviewResponse,
   Outlet,
+  OutletCommitReport,
+  OutletCommitRequest,
+  OutletPreviewResponse,
   Result,
   ResultsPage,
   Run,
@@ -152,11 +158,28 @@ export const api = {
 
   // University Languages
   listLanguages: () => request<UniversityLanguage[]>("/languages"),
-  createLanguage: (payload: { iso_code: string; language_label: string; university_name: string }) =>
+  createLanguage: (payload: { iso_code: string; university_name: string }) =>
     request<UniversityLanguage>("/languages", { method: "POST", body: JSON.stringify(payload) }),
-  updateLanguage: (id: UUID, payload: { iso_code?: string; language_label?: string; university_name?: string }) =>
+  updateLanguage: (id: UUID, payload: { iso_code?: string; university_name?: string }) =>
     request<UniversityLanguage>(`/languages/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
   deleteLanguage: (id: UUID) => request<void>(`/languages/${id}`, { method: "DELETE" }),
+  bulkDeleteLanguages: (language_ids: UUID[]) =>
+    request<void>("/languages/bulk-delete", {
+      method: "POST",
+      body: JSON.stringify({ language_ids }),
+    }),
+  previewLanguageImport: async (file: File): Promise<LanguagePreviewResponse> => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return request<LanguagePreviewResponse>("/languages/import/preview", { method: "POST", body: fd });
+  },
+  commitLanguageImport: (payload: LanguageCommitRequest) =>
+    request<LanguageCommitReport>("/languages/import/commit", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  downloadLanguageTemplate: () => fetchBlob("/languages/import/template"),
+  exportLanguages: () => fetchBlob("/languages/export"),
 
   // Searches
   listSearches: () => request<Search[]>("/searches"),
@@ -179,6 +202,21 @@ export const api = {
     fd.append("file", file);
     return request<ImportReport>(`/outlets/import?mode=${mode}`, { method: "POST", body: fd });
   },
+  previewOutletImport: async (file: File): Promise<OutletPreviewResponse> => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return request<OutletPreviewResponse>("/outlets/import/preview", { method: "POST", body: fd });
+  },
+  commitOutletImport: (payload: OutletCommitRequest) =>
+    request<OutletCommitReport>("/outlets/import/commit", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  bulkDeleteOutlets: (outlet_ids: UUID[]) =>
+    request<void>("/outlets/bulk-delete", {
+      method: "POST",
+      body: JSON.stringify({ outlet_ids }),
+    }),
   downloadImportTemplate: () => fetchBlob("/outlets/import/template"),
   exportOutlets: () => fetchBlob("/outlets/export"),
 

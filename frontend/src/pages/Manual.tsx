@@ -42,11 +42,24 @@ saving.
 ## 2. Languages
 
 Go to **Languages** and define the university name in each language you need.
-Each entry has an ISO code (e.g. \`en\`, \`ja\`), a human label, and the
-university name in that language. A language must be defined here before it can
-be used in the University Name option of a search.
+Each entry has an ISO code (e.g. \`EN\`, \`JA\`) and the university name in that
+language. A language must be defined here before it can be used in the
+University Name option of a search.
 
 A default English entry ("Kobe University") is seeded for every new account.
+
+### 2.1 Bulk import
+
+Click **Template** to download a starter CSV. Columns: \`iso_code\` (uppercase)
+and \`university_name\`. Upload with **Import — Add** to merge new rows into
+your list, or **Import — Replace all** to wipe your list first.
+
+If a row uses an ISO code not in the supported list, you'll be prompted to pick
+a valid language for each affected row. If a row duplicates a language you've
+already defined, you choose per-row whether to keep the existing entry or
+replace it with the one from the file.
+
+Select rows in the table and use **Delete selected** to remove several at once.
 
 ---
 
@@ -113,8 +126,9 @@ In **Run History**, tick rows to select them. A toolbar appears offering:
 
 - **Delete selected** — permanently removes the selected runs and their results.
 - **Merge & open** — combines the result sets (deduplicated by URL) and opens
-  them in a temporary view with the same checklist and CSV export as a single run.
-  The merged view is not saved as a new run.
+  them in the same review-and-export view as a single run, with checkboxes,
+  language grouping, and CSV export. Toggling a row updates the selection on
+  the underlying run. The merged view itself is not saved as a new run.
 
 The **Select all** checkbox selects only the currently visible rows (filtered
 by the active search/status filter).
@@ -139,6 +153,15 @@ with **Export**.
 
 CSV columns: \`name\`, \`domain\`, \`category\`, \`keyword_langs\` (comma-separated ISO
 codes), \`notes\` (ignored on import).
+
+On upload, you'll see a preview showing which rows will be added and which
+duplicate an existing outlet. For each duplicate, you choose whether to keep
+the existing entry or replace it with the value from the file. Commit when
+ready.
+
+### 6.2 Bulk delete
+Tick the rows you want to remove and click **Delete selected**. Confirm in the
+dialog. Deletion is permanent.
 
 ---
 
@@ -180,7 +203,20 @@ Visit \`/docs\` on the server (FastAPI's auto-generated OpenAPI explorer).
 
 export default function Manual() {
   return (
-    <div className="card prose max-w-none p-6 prose-headings:text-brand prose-h1:mt-0 prose-h2:mt-8 prose-h2:border-b prose-h2:border-slate-200 prose-h2:pb-1 prose-pre:bg-slate-900 prose-pre:text-emerald-200 prose-a:text-brand">
+    <div
+      className={
+        "card prose max-w-none p-8 " +
+        "prose-headings:text-brand prose-headings:font-semibold " +
+        "prose-h1:text-3xl prose-h1:mt-0 prose-h1:mb-6 " +
+        "prose-h2:text-2xl prose-h2:mt-12 prose-h2:mb-4 prose-h2:border-b prose-h2:border-slate-200 prose-h2:pb-2 " +
+        "prose-h3:text-lg prose-h3:mt-8 prose-h3:mb-3 " +
+        "prose-h4:text-base prose-h4:mt-6 prose-h4:mb-2 " +
+        "prose-p:my-3 prose-li:my-1 " +
+        "prose-hr:my-8 " +
+        "prose-pre:bg-slate-900 prose-pre:text-emerald-200 " +
+        "prose-a:text-brand prose-a:no-underline hover:prose-a:underline"
+      }
+    >
       <ReactMarkdown>{MD}</ReactMarkdown>
     </div>
   );

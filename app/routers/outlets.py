@@ -15,9 +15,16 @@ from app.models.user import User
 from app.schemas.outlet import (
     ImportReport,
     ImportReportRow,
+    OutletCommitItem,
+    OutletCommitRequest,
+    OutletCommitReport,
     OutletCreate,
+    OutletDuplicateRow,
     OutletOut,
+    OutletPreviewResponse,
+    OutletPreviewRow,
     OutletUpdate,
+    _DOMAIN_RE,
 )
 from app.schemas.outlet import _clean_domain  # type: ignore[attr-defined]
 
@@ -106,6 +113,33 @@ async def update_outlet(
     await db.commit()
     await db.refresh(o)
     return _outlet_to_out(o)
+
+
+@router.post("/bulk-delete", status_code=status.HTTP_204_NO_CONTENT)
+async def bulk_delete_outlets(
+    payload: dict,
+    current: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    raw_ids = payload.get("outlet_ids") or []
+    if not raw_ids:
+        return
+    ids: list[UUID] = []
+    for x in raw_ids:
+        try:
+            ids.append(UUID(str(x)))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        return
+    rows = (
+        await db.execute(
+            select(Outlet).where(Outlet.id.in_(ids), Outlet.user_id == current.id)
+        )
+    ).scalars().all()
+    for o in rows:
+        await db.delete(o)
+    await db.commit()
 
 
 @router.delete("/{outlet_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -274,3 +308,197 @@ async def import_outlets(
 
     await db.commit()
     return ImportReport(imported=imported, skipped=skipped)
+
+
+# ---------------------------------------------------------------------------
+# Preview / commit (duplicate-resolution flow)
+# ---------------------------------------------------------------------------
+
+
+def _parse_outlet_csv(body_bytes: bytes) -> tuple[list[dict], list[str]]:
+    body_str = body_bytes.decode("utf-8-sig")
+    reader = csv.reader(io.StringIO(body_str))
+    parse_errors: list[str] = []
+
+    try:
+        headers_row = next(reader)
+    except StopIteration:
+        return [], ["Empty CSV file"]
+    header_map = {h.strip().lower(): i for i, h in enumerate(headers_row)}
+    for required in ("name", "domain"):
+        if required not in header_map:
+            return [], [f"Missing required column: {required}"]
+
+    rows: list[dict] = []
+    for i, row in enumerate(reader, start=2):
+        try:
+            name = row[header_map["name"]].strip() if len(row) > header_map["name"] else ""
+            domain_raw = row[header_map["domain"]].strip() if len(row) > header_map["domain"] else ""
+        except IndexError:
+            parse_errors.append(f"Row {i}: too short")
+            continue
+        if not name and not domain_raw:
+            continue
+        if not name or not domain_raw:
+            parse_errors.append(f"Row {i}: missing name or domain")
+            continue
+        domain = _clean_domain(domain_raw)
+        if not _DOMAIN_RE.match(domain):
+            parse_errors.append(f"Row {i}: invalid domain '{domain_raw}'")
+            continue
+
+        category = None
+        if "category" in header_map and len(row) > header_map["category"]:
+            category = row[header_map["category"]].strip() or None
+
+        langs: list[str] = []
+        if "keyword_langs" in header_map and len(row) > header_map["keyword_langs"]:
+            raw_langs = row[header_map["keyword_langs"]]
+            for token in raw_langs.replace(";", ",").split(","):
+                t = token.strip().lower()
+                if t:
+                    langs.append(t)
+
+        rows.append({
+            "row_num": i,
+            "name": name,
+            "domain": domain,
+            "category": category,
+            "keyword_langs": langs,
+        })
+    return rows, parse_errors
+
+
+@router.post("/import/preview", response_model=OutletPreviewResponse)
+async def preview_outlet_import(
+    file: UploadFile = File(...),
+    current: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> OutletPreviewResponse:
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Please upload a .csv file"
+        )
+    body = await file.read()
+    rows, parse_errors = _parse_outlet_csv(body)
+
+    existing_by_domain = {
+        o.domain: o
+        for o in (
+            await db.execute(select(Outlet).where(Outlet.user_id == current.id))
+        ).scalars().all()
+    }
+
+    new_rows: list[OutletPreviewRow] = []
+    duplicate_rows: list[OutletDuplicateRow] = []
+    seen_in_file: set[str] = set()
+
+    for r in rows:
+        domain = r["domain"]
+        if domain in seen_in_file:
+            parse_errors.append(f"Row {r['row_num']}: duplicate domain '{domain}' within file (kept first)")
+            continue
+        seen_in_file.add(domain)
+        if domain in existing_by_domain:
+            existing = existing_by_domain[domain]
+            duplicate_rows.append(
+                OutletDuplicateRow(
+                    row_num=r["row_num"],
+                    domain=domain,
+                    new_name=r["name"],
+                    new_category=r["category"],
+                    new_keyword_langs=r["keyword_langs"],
+                    existing_id=existing.id,
+                    existing_name=existing.name,
+                    existing_category=existing.category,
+                    existing_keyword_langs=list(existing.keyword_langs or []),
+                )
+            )
+        else:
+            new_rows.append(
+                OutletPreviewRow(
+                    row_num=r["row_num"],
+                    name=r["name"],
+                    domain=domain,
+                    category=r["category"],
+                    keyword_langs=r["keyword_langs"],
+                )
+            )
+
+    return OutletPreviewResponse(
+        new_rows=new_rows,
+        duplicate_rows=duplicate_rows,
+        parse_errors=parse_errors,
+    )
+
+
+@router.post("/import/commit", response_model=OutletCommitReport)
+async def commit_outlet_import(
+    payload: OutletCommitRequest,
+    current: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> OutletCommitReport:
+    if payload.mode == "replace":
+        existing = (
+            await db.execute(select(Outlet).where(Outlet.user_id == current.id))
+        ).scalars().all()
+        deleted = len(existing)
+        for o in existing:
+            await db.delete(o)
+        await db.flush()
+
+        added = 0
+        seen: set[str] = set()
+        for item in payload.items:
+            if item.domain in seen:
+                continue
+            seen.add(item.domain)
+            db.add(
+                Outlet(
+                    user_id=current.id,
+                    name=item.name,
+                    domain=item.domain,
+                    category=item.category,
+                    keyword_langs=item.keyword_langs,
+                    is_active=True,
+                )
+            )
+            added += 1
+        await db.commit()
+        return OutletCommitReport(added=added, replaced=0, deleted=deleted)
+
+    # ADD mode
+    by_domain = {
+        o.domain: o
+        for o in (
+            await db.execute(select(Outlet).where(Outlet.user_id == current.id))
+        ).scalars().all()
+    }
+    added = 0
+    replaced = 0
+    for item in payload.items:
+        if item.replace_existing_id is not None:
+            row = await db.get(Outlet, item.replace_existing_id)
+            if row is None or row.user_id != current.id:
+                continue
+            row.name = item.name
+            row.domain = item.domain
+            row.category = item.category
+            row.keyword_langs = item.keyword_langs
+            replaced += 1
+            continue
+        if item.domain in by_domain:
+            continue
+        new_o = Outlet(
+            user_id=current.id,
+            name=item.name,
+            domain=item.domain,
+            category=item.category,
+            keyword_langs=item.keyword_langs,
+            is_active=True,
+        )
+        db.add(new_o)
+        by_domain[item.domain] = new_o
+        added += 1
+    await db.commit()
+    return OutletCommitReport(added=added, replaced=replaced, deleted=0)

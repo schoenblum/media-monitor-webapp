@@ -2,7 +2,11 @@ import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { Outlet, Search, SearchConfig, SearchTermConfig, UniversityLanguage, UUID } from "../api/types";
-import { defaultSearchConfig } from "../api/types";
+import { ALL_LANGUAGES, defaultSearchConfig } from "../api/types";
+
+function labelFor(code: string): string {
+  return ALL_LANGUAGES.find((l) => l.code === code)?.label ?? code;
+}
 import { Spinner } from "../components/Spinner";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 
@@ -369,33 +373,71 @@ function SearchEditor({
                 to add them first.
               </p>
             ) : (
-              <div className="mt-2 flex flex-wrap gap-2">
-                {languages.map((lang) => {
-                  const selected = config.university_name.language_ids.includes(lang.id);
-                  return (
-                    <label key={lang.id} className="flex items-center gap-1.5 text-sm cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={selected}
-                        onChange={(e) => {
-                          const ids = new Set(config.university_name.language_ids);
-                          if (e.target.checked) ids.add(lang.id);
-                          else ids.delete(lang.id);
-                          setConfig({
-                            ...config,
-                            university_name: { ...config.university_name, language_ids: [...ids] },
-                          });
-                        }}
-                      />
-                      <span>
-                        {lang.language_label}{" "}
-                        <span className="text-xs text-slate-400">({lang.iso_code})</span>
-                        <span className="ml-1 text-xs text-slate-500">— {lang.university_name}</span>
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
+              <>
+                <div className="mb-2 flex gap-2 text-xs">
+                  <button
+                    className="btn-ghost"
+                    onClick={() =>
+                      setConfig({
+                        ...config,
+                        university_name: {
+                          ...config.university_name,
+                          language_ids: languages.map((l) => l.id),
+                        },
+                      })
+                    }
+                  >
+                    Select all
+                  </button>
+                  <button
+                    className="btn-ghost"
+                    onClick={() =>
+                      setConfig({
+                        ...config,
+                        university_name: { ...config.university_name, language_ids: [] },
+                      })
+                    }
+                  >
+                    Clear all
+                  </button>
+                </div>
+                <div className="max-h-80 overflow-y-auto rounded-md border border-slate-200">
+                  <ul className="divide-y divide-slate-100">
+                    {languages.map((lang) => {
+                      const selected = config.university_name.language_ids.includes(lang.id);
+                      return (
+                        <li key={lang.id} className="flex items-center gap-2 px-3 py-1.5 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={(e) => {
+                              const ids = new Set(config.university_name.language_ids);
+                              if (e.target.checked) ids.add(lang.id);
+                              else ids.delete(lang.id);
+                              setConfig({
+                                ...config,
+                                university_name: {
+                                  ...config.university_name,
+                                  language_ids: [...ids],
+                                },
+                              });
+                            }}
+                          />
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs">
+                            {lang.iso_code.toUpperCase()}
+                          </span>
+                          <span className="text-xs text-slate-500">{labelFor(lang.iso_code)}</span>
+                          <span className="flex-1 truncate">{lang.university_name}</span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+                <p className="mt-1 text-xs text-slate-500">
+                  {config.university_name.language_ids.length} of {languages.length} languages
+                  selected.
+                </p>
+              </>
             )}
           </>
         )}

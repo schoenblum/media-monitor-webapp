@@ -47,7 +47,6 @@ async def seed_user_defaults(db: AsyncSession, user: User) -> None:
     en_lang = UniversityLanguage(
         user_id=user.id,
         iso_code="en",
-        language_label="English",
         university_name="Kobe University",
     )
     db.add(en_lang)

@@ -10,9 +10,97 @@ export type RunStatus = "pending" | "running" | "complete" | "failed";
 export interface UniversityLanguage {
   id: UUID;
   iso_code: string;
-  language_label: string;
   university_name: string;
   created_at: string;
+}
+
+export interface LanguagePreviewRow {
+  row_num: number;
+  iso_code: string;
+  university_name: string;
+}
+
+export interface LanguageInvalidIsoRow {
+  row_num: number;
+  raw_iso: string;
+  university_name: string;
+}
+
+export interface LanguageDuplicateRow {
+  row_num: number;
+  iso_code: string;
+  new_university_name: string;
+  existing_id: UUID;
+  existing_university_name: string;
+}
+
+export interface LanguagePreviewResponse {
+  new_rows: LanguagePreviewRow[];
+  invalid_iso_rows: LanguageInvalidIsoRow[];
+  duplicate_rows: LanguageDuplicateRow[];
+  parse_errors: string[];
+}
+
+export interface LanguageCommitItem {
+  iso_code: string;
+  university_name: string;
+  replace_existing_id?: UUID | null;
+}
+
+export interface LanguageCommitRequest {
+  mode: "add" | "replace";
+  items: LanguageCommitItem[];
+}
+
+export interface LanguageCommitReport {
+  added: number;
+  replaced: number;
+  deleted: number;
+}
+
+export interface OutletPreviewRow {
+  row_num: number;
+  name: string;
+  domain: string;
+  category: string | null;
+  keyword_langs: string[];
+}
+
+export interface OutletDuplicateRow {
+  row_num: number;
+  domain: string;
+  new_name: string;
+  new_category: string | null;
+  new_keyword_langs: string[];
+  existing_id: UUID;
+  existing_name: string;
+  existing_category: string | null;
+  existing_keyword_langs: string[];
+}
+
+export interface OutletPreviewResponse {
+  new_rows: OutletPreviewRow[];
+  duplicate_rows: OutletDuplicateRow[];
+  parse_errors: string[];
+}
+
+export interface OutletCommitItem {
+  name: string;
+  domain: string;
+  category?: string | null;
+  keyword_langs: string[];
+  replace_existing_id?: UUID | null;
+}
+
+export interface OutletCommitRequest {
+  mode: "add" | "replace";
+  items: OutletCommitItem[];
+}
+
+export interface OutletCommitReport {
+  added: number;
+  replaced: number;
+  deleted: number;
 }
 
 // ---------------------------------------------------------------------------

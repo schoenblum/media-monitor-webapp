@@ -145,7 +145,6 @@ async def duplicate_user(
         new_lang = UniversityLanguage(
             user_id=new_user.id,
             iso_code=lang.iso_code,
-            language_label=lang.language_label,
             university_name=lang.university_name,
         )
         db.add(new_lang)
