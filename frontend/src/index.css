@@ -46,3 +46,142 @@
     @apply pill bg-slate-100 text-slate-700;
   }
 }
+
+/* -------------------------------------------------------------------------
+   Manual page — explicit typography for markdown content. We avoid the
+   @tailwindcss/typography plugin so the manual renders without an extra
+   dependency. Scope everything under .manual-content so no other page can
+   pick up these rules accidentally.
+------------------------------------------------------------------------- */
+
+.manual-content {
+  color: #1e293b; /* slate-800 */
+  line-height: 1.65;
+  font-size: 0.95rem;
+}
+
+.manual-content h1 {
+  font-size: 2rem;
+  font-weight: 800;
+  color: #003d7a; /* brand */
+  margin: 0 0 1.5rem 0;
+  line-height: 1.2;
+}
+
+.manual-content h2 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #003d7a;
+  margin: 2.75rem 0 1rem 0;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid #e2e8f0; /* slate-200 */
+  line-height: 1.3;
+}
+
+.manual-content h3 {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #1e5aa8; /* brand-light */
+  margin: 2rem 0 0.7rem 0;
+  line-height: 1.35;
+}
+
+.manual-content h4 {
+  font-size: 1.02rem;
+  font-weight: 600;
+  color: #1e293b;
+  margin: 1.5rem 0 0.5rem 0;
+}
+
+.manual-content p {
+  margin: 0.85rem 0;
+}
+
+.manual-content ul,
+.manual-content ol {
+  margin: 0.85rem 0;
+  padding-left: 1.5rem;
+}
+
+.manual-content ul {
+  list-style: disc;
+}
+
+.manual-content ol {
+  list-style: decimal;
+}
+
+.manual-content li {
+  margin: 0.35rem 0;
+}
+
+.manual-content li > p {
+  margin: 0.2rem 0;
+}
+
+.manual-content strong {
+  font-weight: 600;
+  color: #0f172a; /* slate-900 */
+}
+
+.manual-content a {
+  color: #003d7a;
+  text-decoration: none;
+}
+
+.manual-content a:hover {
+  text-decoration: underline;
+}
+
+.manual-content code {
+  background: #f1f5f9; /* slate-100 */
+  color: #0f172a;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+
+.manual-content pre {
+  background: #0f172a; /* slate-900 */
+  color: #a7f3d0; /* emerald-200 */
+  padding: 1rem 1.1rem;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 1rem 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.manual-content pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  border-radius: 0;
+  font-size: inherit;
+}
+
+.manual-content blockquote {
+  margin: 1rem 0;
+  padding: 0.6rem 1rem;
+  border-left: 4px solid #003d7a;
+  background: #f8fafc; /* slate-50 */
+  color: #475569; /* slate-600 */
+}
+
+.manual-content blockquote p {
+  margin: 0.25rem 0;
+}
+
+.manual-content hr {
+  border: none;
+  border-top: 1px solid #e2e8f0;
+  margin: 2.25rem 0;
+}
+
+.manual-content > :first-child {
+  margin-top: 0;
+}
+
+.manual-content > :last-child {
+  margin-bottom: 0;
+}

@@ -196,27 +196,11 @@ a publication date.
 
 **Can I export hits from multiple runs in one CSV?**
 Yes — use **Merge & open** in Run History, then export from the merged view.
-
-**Where can I see the raw API documentation?**
-Visit \`/docs\` on the server (FastAPI's auto-generated OpenAPI explorer).
 `;
 
 export default function Manual() {
   return (
-    <div
-      className={
-        "card prose max-w-none p-8 " +
-        "prose-headings:text-brand prose-headings:font-semibold " +
-        "prose-h1:text-3xl prose-h1:mt-0 prose-h1:mb-6 " +
-        "prose-h2:text-2xl prose-h2:mt-12 prose-h2:mb-4 prose-h2:border-b prose-h2:border-slate-200 prose-h2:pb-2 " +
-        "prose-h3:text-lg prose-h3:mt-8 prose-h3:mb-3 " +
-        "prose-h4:text-base prose-h4:mt-6 prose-h4:mb-2 " +
-        "prose-p:my-3 prose-li:my-1 " +
-        "prose-hr:my-8 " +
-        "prose-pre:bg-slate-900 prose-pre:text-emerald-200 " +
-        "prose-a:text-brand prose-a:no-underline hover:prose-a:underline"
-      }
-    >
+    <div className="card manual-content p-8">
       <ReactMarkdown>{MD}</ReactMarkdown>
     </div>
   );

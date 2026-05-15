@@ -32,7 +32,17 @@ async def lifespan(app: FastAPI):  # noqa: D401
     yield
 
 
-app = FastAPI(title="Media Monitor", version="2.1.0", lifespan=lifespan)
+app = FastAPI(
+    title="Media Monitor",
+    version="2.1.1",
+    lifespan=lifespan,
+    # Auto-generated OpenAPI docs are disabled so the app's internal structure
+    # is not exposed to the public. Developers can still introspect via the
+    # source on GitHub, or by running the app locally and visiting /docs there.
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 
 
 @app.get("/api/v1/health", tags=["health"])
