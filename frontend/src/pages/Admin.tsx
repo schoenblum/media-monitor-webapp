@@ -260,11 +260,12 @@ function CreatedModal({
         </p>
         {info.email_sent ? (
           <p className="mt-2 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
-            A welcome email with the initial password has been sent to {info.email}.
+            A welcome email will be sent to <strong>{info.email}</strong>. The password below is
+            shown only once — keep it handy in case delivery fails.
           </p>
         ) : (
           <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-700">
-            No SMTP configured — send the credentials below manually.
+            No SMTP configured — share the credentials below with the user manually.
           </p>
         )}
         <div className="mt-3 space-y-2 text-sm">

@@ -3,7 +3,7 @@ import copy
 import uuid
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,6 +36,12 @@ router = APIRouter(prefix="/users", tags=["users"])
 settings = get_settings()
 
 
+def _smtp_configured() -> bool:
+    """Cheap synchronous check — no network I/O."""
+    s = get_settings()
+    return bool(s.SMTP_HOST and s.SMTP_FROM)
+
+
 def _user_to_out(u: User) -> UserOut:
     return UserOut(
         id=u.id,
@@ -63,6 +69,7 @@ async def list_users(
 @router.post("", response_model=AdminCreateUserResponse, status_code=status.HTTP_201_CREATED)
 async def create_user(
     payload: UserCreate,
+    background: BackgroundTasks,
     actor: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> AdminCreateUserResponse:
@@ -87,17 +94,23 @@ async def create_user(
     await seed_user_defaults(db, user)
     await db.commit()
 
-    # Send welcome email; failures are non-fatal
-    email_sent = await send_welcome_email(
-        to=user.email,
-        initial_password=initial_password,
-        app_url=settings.BASE_URL,
-    )
+    # Hand the email send off to a background task so SMTP latency or timeouts
+    # never block the HTTP response. `email_sent` here reflects whether the
+    # delivery was *scheduled* (i.e. SMTP is configured) — the admin can still
+    # see the initial password in the response and share it manually.
+    email_will_send = _smtp_configured()
+    if email_will_send:
+        background.add_task(
+            send_welcome_email,
+            to=user.email,
+            initial_password=initial_password,
+            app_url=settings.BASE_URL,
+        )
 
     return AdminCreateUserResponse(
         user=_user_to_out(user),
         initial_password=initial_password,
-        email_sent=email_sent,
+        email_sent=email_will_send,
     )
 
 
@@ -105,6 +118,7 @@ async def create_user(
 async def duplicate_user(
     user_id: UUID,
     payload: DuplicateUserRequest,
+    background: BackgroundTasks,
     actor: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> AdminCreateUserResponse:
@@ -233,16 +247,19 @@ async def duplicate_user(
 
     await db.commit()
 
-    email_sent = await send_welcome_email(
-        to=new_user.email,
-        initial_password=initial_password,
-        app_url=settings.BASE_URL,
-    )
+    email_will_send = _smtp_configured()
+    if email_will_send:
+        background.add_task(
+            send_welcome_email,
+            to=new_user.email,
+            initial_password=initial_password,
+            app_url=settings.BASE_URL,
+        )
 
     return AdminCreateUserResponse(
         user=_user_to_out(new_user),
         initial_password=initial_password,
-        email_sent=email_sent,
+        email_sent=email_will_send,
     )
 
 
