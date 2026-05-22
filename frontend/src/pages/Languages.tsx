@@ -221,11 +221,15 @@ export default function Languages() {
           <button className="btn-secondary" onClick={() => fileRef.current?.click()}>
             Upload CSV
           </button>
+          <button
+            className="btn-secondary"
+            onClick={exportCsv}
+            title="Download your university-name language list as a CSV (re-importable on another account)"
+          >
+            Download CSV
+          </button>
           <button className="btn-ghost" onClick={downloadTemplate}>
             Template
-          </button>
-          <button className="btn-ghost" onClick={exportCsv}>
-            Export
           </button>
         </div>
 

@@ -1,6 +1,14 @@
 """Canonical BCP-47 / ISO 639 list used for CSV import validation.
 
-Kept in sync with frontend/src/api/types.ts ALL_LANGUAGES.
+⚠️ PAIRED-EDIT WARNING ⚠️
+The set of supported language codes is duplicated between the backend and the
+frontend. Any change here MUST be mirrored in
+``frontend/src/api/types.ts`` (the ``ALL_LANGUAGES`` constant) — otherwise CSV
+imports will accept codes the UI can't render, or reject codes the UI offers.
+
+A future revision may collapse this to a single source of truth (e.g. a build
+step that generates the TS list from this dict, or a backend endpoint the
+frontend fetches at startup). Until then: edit both files together.
 """
 from __future__ import annotations
 

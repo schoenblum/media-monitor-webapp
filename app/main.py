@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI):  # noqa: D401
 
 app = FastAPI(
     title="Media Monitor",
-    version="2.1.1",
+    version="2.2.0",
     lifespan=lifespan,
     # Auto-generated OpenAPI docs are disabled so the app's internal structure
     # is not exposed to the public. Developers can still introspect via the

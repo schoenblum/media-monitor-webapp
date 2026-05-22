@@ -105,13 +105,15 @@ export interface OutletCommitReport {
 
 // ---------------------------------------------------------------------------
 // Search config
+//
+// NOTE: any change to this shape must be mirrored in app/schemas/search.py
+// (SearchConfig) and app/models/search.py (DEFAULT_SEARCH_CONFIG).
 // ---------------------------------------------------------------------------
 
 export interface SearchTermConfig {
   id: string;
   text: string;
   operator: "AND" | "OR" | "NOT" | null;
-  pages: number;
 }
 
 export interface DoiConfig {
@@ -122,6 +124,7 @@ export interface DoiConfig {
 export interface UniversityNameConfig {
   enabled: boolean;
   language_ids: UUID[];
+  pages: number;
 }
 
 export interface OutletsConfig {
@@ -130,8 +133,11 @@ export interface OutletsConfig {
 }
 
 export interface SearchConfig {
-  search_window: "last" | "hours";
+  search_window: "last" | "hours" | "range";
   fallback_hours: number;
+  date_from: string; // YYYY-MM-DD; only meaningful when search_window === "range"
+  date_to: string;   // YYYY-MM-DD; empty = up to today (range mode)
+  terms_pages: number;
   terms: SearchTermConfig[];
   doi: DoiConfig;
   university_name: UniversityNameConfig;
@@ -142,9 +148,12 @@ export function defaultSearchConfig(): SearchConfig {
   return {
     search_window: "last",
     fallback_hours: 72,
+    date_from: "",
+    date_to: "",
+    terms_pages: 1,
     terms: [],
     doi: { text: "", pages: 1 },
-    university_name: { enabled: false, language_ids: [] },
+    university_name: { enabled: false, language_ids: [], pages: 1 },
     outlets: { enabled: false, outlet_ids: [] },
   };
 }
@@ -274,6 +283,12 @@ export const LANG_LABELS: Record<Lang, string> = {
 
 // ---------------------------------------------------------------------------
 // BCP-47 / ISO 639 language dropdown list
+//
+// ⚠️ PAIRED-EDIT WARNING ⚠️
+// This list is duplicated in app/services/languages.py (SUPPORTED_LANGUAGES).
+// Any add/remove/rename here MUST be mirrored there, or CSV imports and the
+// dropdown will drift out of sync. A future revision may collapse this to a
+// single source of truth.
 // ---------------------------------------------------------------------------
 
 export interface LangOption {

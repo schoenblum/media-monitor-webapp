@@ -5,6 +5,7 @@ import type { Result, Run, Search, UUID } from "../api/types";
 import { RunStatusPill } from "../components/RunStatusPill";
 import { Spinner } from "../components/Spinner";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { sourceHostFor } from "../utils/source";
 
 export default function RunHistory() {
   const [runs, setRuns] = useState<Run[]>([]);
@@ -426,7 +427,10 @@ function MergeView({
                             {r.date_extracted && (
                               <span className="pill-amber">{r.date_extracted}</span>
                             )}
-                            <span className="pill-slate">{r.outlet_name}</span>
+                            {(() => {
+                              const host = sourceHostFor(r.url);
+                              return host ? <span className="pill-slate">{host}</span> : null;
+                            })()}
                             {r.detected_lang && (
                               <span className="pill-green">{r.detected_lang.toUpperCase()}</span>
                             )}

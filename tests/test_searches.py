@@ -321,9 +321,12 @@ async def test_search_config_with_term_is_runnable(client):
     config = {
         "search_window": "last",
         "fallback_hours": 72,
-        "terms": [{"id": "aaa-bbb", "text": "Kobe University", "operator": None, "pages": 1}],
+        "date_from": "",
+        "date_to": "",
+        "terms_pages": 1,
+        "terms": [{"id": "aaa-bbb", "text": "Kobe University", "operator": None}],
         "doi": {"text": "", "pages": 1},
-        "university_name": {"enabled": False, "language_ids": []},
+        "university_name": {"enabled": False, "language_ids": [], "pages": 1},
         "outlets": {"enabled": False, "outlet_ids": []},
     }
     r = await client.put(
@@ -334,6 +337,135 @@ async def test_search_config_with_term_is_runnable(client):
     r = await client.post("/api/v1/runs", json={"search_id": search_id}, headers=h)
     assert r.status_code == 400
     assert "credentials" in r.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_search_config_date_range_validation(client):
+    """search_window='range' requires date_from; date_from must be <= date_to."""
+    h = await _login(client)
+    r = await client.post("/api/v1/searches", json={"name": "Range Test"}, headers=h)
+    search_id = r.json()["id"]
+
+    # Missing date_from rejected
+    bad_missing = {
+        "search_window": "range",
+        "fallback_hours": 72,
+        "date_from": "",
+        "date_to": "",
+        "terms_pages": 1,
+        "terms": [{"id": "x", "text": "Kobe", "operator": None}],
+        "doi": {"text": "", "pages": 1},
+        "university_name": {"enabled": False, "language_ids": [], "pages": 1},
+        "outlets": {"enabled": False, "outlet_ids": []},
+    }
+    r = await client.put(
+        f"/api/v1/searches/{search_id}", json={"config": bad_missing}, headers=h
+    )
+    assert r.status_code == 422
+
+    # date_from > date_to rejected
+    bad_order = {**bad_missing, "date_from": "2026-05-10", "date_to": "2026-05-01"}
+    r = await client.put(
+        f"/api/v1/searches/{search_id}", json={"config": bad_order}, headers=h
+    )
+    assert r.status_code == 422
+
+    # Valid: from-only (date_to optional)
+    good_from_only = {**bad_missing, "date_from": "2026-05-01", "date_to": ""}
+    r = await client.put(
+        f"/api/v1/searches/{search_id}", json={"config": good_from_only}, headers=h
+    )
+    assert r.status_code == 200
+
+    # Valid: both, ordered correctly
+    good_both = {**bad_missing, "date_from": "2026-05-01", "date_to": "2026-05-10"}
+    r = await client.put(
+        f"/api/v1/searches/{search_id}", json={"config": good_both}, headers=h
+    )
+    assert r.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_query_builder_university_name_is_and_constraint(client):
+    """University-name acts as an AND constraint, one query per active language."""
+    from app.services.search_engine import _build_query_specs
+
+    class _FakeLang:
+        def __init__(self, id_, iso, name):
+            self.id = id_
+            self.iso_code = iso
+            self.university_name = name
+
+    langs = {
+        "L1": _FakeLang("L1", "en", "Kobe University"),
+        "L2": _FakeLang("L2", "ja", "神戸大学"),
+    }
+    config = {
+        "search_window": "last",
+        "fallback_hours": 72,
+        "terms_pages": 2,
+        "terms": [{"id": "1", "text": "research", "operator": None}],
+        "doi": {"text": "10.1038/x", "pages": 3},
+        "university_name": {"enabled": True, "language_ids": ["L1", "L2"], "pages": 5},
+        "outlets": {"enabled": False, "outlet_ids": []},
+    }
+    specs = _build_query_specs(config, [], langs)
+
+    # DOI standalone + 2 per-language uni queries, no bare-terms query.
+    queries = [s.query for s in specs]
+    assert '"10.1038/x"' in queries
+    assert any('"Kobe University"' in q and '"research"' in q for q in queries)
+    assert any('"神戸大学"' in q and '"research"' in q for q in queries)
+    assert '"research"' not in queries  # bare terms suppressed when uni-name on
+    # Page counts: DOI uses doi.pages, uni queries use university_name.pages
+    doi_spec = next(s for s in specs if s.query == '"10.1038/x"')
+    assert doi_spec.pages == 3
+    uni_spec = next(s for s in specs if '"Kobe University"' in s.query)
+    assert uni_spec.pages == 5
+    assert uni_spec.iso_code == "en"
+
+
+@pytest.mark.asyncio
+async def test_query_builder_terms_alone_when_uni_disabled(client):
+    """When university_name is disabled, the bare combined-terms query runs."""
+    from app.services.search_engine import _build_query_specs
+
+    config = {
+        "search_window": "last",
+        "terms_pages": 4,
+        "terms": [
+            {"id": "1", "text": "Kobe", "operator": None},
+            {"id": "2", "text": "research", "operator": "AND"},
+        ],
+        "doi": {"text": "", "pages": 1},
+        "university_name": {"enabled": False, "language_ids": [], "pages": 1},
+        "outlets": {"enabled": False, "outlet_ids": []},
+    }
+    specs = _build_query_specs(config, [], {})
+    assert len(specs) == 1
+    assert specs[0].pages == 4
+    assert '"Kobe"' in specs[0].query and '"research"' in specs[0].query
+
+
+@pytest.mark.asyncio
+async def test_date_params_range_mode_uses_sort():
+    """Range mode emits sort=date:r:YYYYMMDD:YYYYMMDD; relative mode uses dateRestrict."""
+    from app.services.search_engine import _build_date_params
+
+    rel = _build_date_params({"search_window": "last", "fallback_hours": 72}, 5)
+    assert rel == {"dateRestrict": "d5"}
+
+    rng = _build_date_params(
+        {"search_window": "range", "date_from": "2026-05-01", "date_to": "2026-05-10"},
+        99,
+    )
+    assert rng == {"sort": "date:r:20260501:20260510"}
+
+    # date_to omitted → defaults to today; we just check the prefix and date_from part.
+    rng_open = _build_date_params(
+        {"search_window": "range", "date_from": "2026-05-01", "date_to": ""}, 99
+    )
+    assert rng_open["sort"].startswith("date:r:20260501:")
 
 
 # ---------------------------------------------------------------------------

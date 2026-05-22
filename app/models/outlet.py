@@ -1,4 +1,4 @@
-"""Outlet model and the Search ↔ Outlet link table."""
+"""Outlet model."""
 import uuid
 from datetime import datetime
 
@@ -27,20 +27,3 @@ class Outlet(Base):
     )
 
     user = relationship("User", back_populates="outlets")
-    search_links = relationship(
-        "SearchOutletLink", back_populates="outlet", cascade="all, delete-orphan"
-    )
-
-
-class SearchOutletLink(Base):
-    __tablename__ = "search_outlet_links"
-
-    search_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("searches.id", ondelete="CASCADE"), primary_key=True
-    )
-    outlet_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("outlets.id", ondelete="CASCADE"), primary_key=True
-    )
-
-    search = relationship("Search", back_populates="outlet_links")
-    outlet = relationship("Outlet", back_populates="search_links")

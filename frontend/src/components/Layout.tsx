@@ -11,7 +11,7 @@ const navItems = [
   { to: "/manual", label: "Manual" },
 ];
 
-const APP_VERSION = "2.1.1";
+const APP_VERSION = "2.2.0";
 
 export default function Layout() {
   const { user, logout } = useAuth();

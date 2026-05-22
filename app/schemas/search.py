@@ -1,9 +1,13 @@
-"""Pydantic schemas for searches — config-based model."""
-from datetime import datetime
+"""Pydantic schemas for searches — config-based model.
+
+NOTE: any change to this schema must be mirrored in
+``frontend/src/api/types.ts`` (``SearchConfig`` + ``defaultSearchConfig()``).
+"""
+from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -15,7 +19,6 @@ class SearchTermConfig(BaseModel):
     id: str = ""
     text: str = ""
     operator: Literal["AND", "OR", "NOT"] | None = None
-    pages: int = Field(default=1, ge=1, le=10)
 
 
 class DoiConfig(BaseModel):
@@ -26,6 +29,7 @@ class DoiConfig(BaseModel):
 class UniversityNameConfig(BaseModel):
     enabled: bool = False
     language_ids: list[str] = []
+    pages: int = Field(default=1, ge=1, le=10)
 
 
 class OutletsConfig(BaseModel):
@@ -33,13 +37,41 @@ class OutletsConfig(BaseModel):
     outlet_ids: list[str] = []
 
 
+def _parse_iso_date(value: str) -> date | None:
+    s = (value or "").strip()
+    if not s:
+        return None
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        return None
+
+
 class SearchConfig(BaseModel):
-    search_window: Literal["last", "hours"] = "last"
+    search_window: Literal["last", "hours", "range"] = "last"
     fallback_hours: int = Field(default=72, ge=1, le=8760)
+    date_from: str = ""
+    date_to: str = ""
+    terms_pages: int = Field(default=1, ge=1, le=10)
     terms: list[SearchTermConfig] = []
     doi: DoiConfig = Field(default_factory=DoiConfig)
     university_name: UniversityNameConfig = Field(default_factory=UniversityNameConfig)
     outlets: OutletsConfig = Field(default_factory=OutletsConfig)
+
+    @model_validator(mode="after")
+    def _validate_range(self) -> "SearchConfig":
+        if self.search_window != "range":
+            return self
+        df = _parse_iso_date(self.date_from)
+        if df is None:
+            raise ValueError("date_from is required (YYYY-MM-DD) when search_window is 'range'.")
+        if self.date_to.strip():
+            dt = _parse_iso_date(self.date_to)
+            if dt is None:
+                raise ValueError("date_to must be YYYY-MM-DD or empty.")
+            if df > dt:
+                raise ValueError("date_from must be on or before date_to.")
+        return self
 
 
 # ---------------------------------------------------------------------------

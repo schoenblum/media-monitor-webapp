@@ -7,10 +7,23 @@ Each Run calls ``execute_run`` in the background:
 3. Builds a list of (query_string, pages, applicable_outlets) tuples.
 4. Executes paginated Google CSE requests and deduplicates by URL.
 5. Commits Result rows as they arrive; marks the Run complete/failed on exit.
+
+Query composition rules (revision v2.2):
+
+* **DOI** is always its own standalone query, unaffected by terms and operators,
+  with its own ``doi.pages`` page count.
+* **Terms** are concatenated (AND/OR/NOT) into a single combined query.
+* When **university_name is enabled** with N selected languages, the terms
+  query is *replaced* by N per-language queries of the form
+  ``(combined_terms) AND "<university_name_in_lang_N>"`` (or just
+  ``"<university_name_in_lang_N>"`` when there are no terms).
+  Each such query fetches ``university_name.pages`` pages.
+* When **university_name is disabled**, the combined terms query (if any) runs
+  on its own, fetching ``terms_pages`` pages.
 """
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from math import ceil
 from typing import NamedTuple
 from uuid import UUID
@@ -44,6 +57,7 @@ class QuerySpec(NamedTuple):
     query: str
     pages: int
     outlets: list  # list of Outlet objects; empty = no site restriction
+    iso_code: str  # language ISO for outlet-language filtering; "" = no language axis
 
 
 # ---------------------------------------------------------------------------
@@ -107,33 +121,26 @@ def _build_query_specs(
         else []
     )
 
-    # Base terms query
     base_query = _build_term_query(terms)
-    base_pages = max(
-        (t.get("pages", 1) for t in terms if t.get("text", "").strip()),
-        default=1,
-    )
+    terms_pages = int(config.get("terms_pages") or 1)
 
-    # DOI query
+    # DOI — always standalone.
     doi_text = doi_cfg.get("text", "").strip()
-    doi_pages = doi_cfg.get("pages", 1)
-
-    # Collect base queries (terms and DOI)
-    base_queries: list[tuple[str, int]] = []
-    if base_query:
-        base_queries.append((base_query, base_pages))
+    doi_pages = int(doi_cfg.get("pages") or 1)
     if doi_text:
-        base_queries.append((f'"{doi_text}"', doi_pages))
+        specs.append(
+            QuerySpec(
+                query=f'"{doi_text}"',
+                pages=doi_pages,
+                outlets=list(active_outlets) if outlets_enabled else [],
+                iso_code="",
+            )
+        )
 
-    # University name queries
+    # University name — AND constraint on the terms, one query per active language.
     uni_enabled = uni_cfg.get("enabled", False)
     uni_lang_ids = [str(lid) for lid in uni_cfg.get("language_ids", [])]
-
-    for q, pages in base_queries:
-        if outlets_enabled and active_outlets:
-            specs.append(QuerySpec(query=q, pages=pages, outlets=list(active_outlets)))
-        else:
-            specs.append(QuerySpec(query=q, pages=pages, outlets=[]))
+    uni_pages = int(uni_cfg.get("pages") or 1)
 
     if uni_enabled and uni_lang_ids:
         for lang_id in uni_lang_ids:
@@ -142,40 +149,88 @@ def _build_query_specs(
                 continue
             iso = lang.iso_code
             uni_name = lang.university_name
-
-            # Append university name to the base term query (if any) or use alone
             if base_query:
-                uni_q = f'{base_query} "{uni_name}"'
+                q = f'{base_query} "{uni_name}"'
             else:
-                uni_q = f'"{uni_name}"'
-
-            # If DOI is set, treat it as a separate query alongside university name
-            if doi_text:
-                doi_uni_q = f'"{doi_text}" "{uni_name}"'
-                doi_outlets = _filter_outlets_by_lang(active_outlets, iso) if outlets_enabled else []
-                specs.append(QuerySpec(query=doi_uni_q, pages=doi_pages, outlets=doi_outlets))
-
-            applicable = _filter_outlets_by_lang(active_outlets, iso) if outlets_enabled else []
-            specs.append(QuerySpec(query=uni_q, pages=1, outlets=applicable))
+                q = f'"{uni_name}"'
+            specs.append(
+                QuerySpec(
+                    query=q,
+                    pages=uni_pages,
+                    outlets=list(active_outlets) if outlets_enabled else [],
+                    iso_code=iso,
+                )
+            )
+    elif base_query:
+        # Plain terms query without the university-name constraint.
+        specs.append(
+            QuerySpec(
+                query=base_query,
+                pages=terms_pages,
+                outlets=list(active_outlets) if outlets_enabled else [],
+                iso_code="",
+            )
+        )
 
     return specs
 
 
 def _filter_outlets_by_lang(outlets: list, iso_code: str) -> list:
-    """Return outlets that have no language restriction or include this ISO code."""
+    """Return outlets that have no language restriction or include this ISO code.
+
+    Called only for queries that have a language axis (university-name queries).
+    For DOI and plain-terms queries (iso_code == ""), no filtering is applied.
+    """
+    if not iso_code:
+        return outlets
     return [o for o in outlets if not o.keyword_langs or iso_code in o.keyword_langs]
+
+
+# ---------------------------------------------------------------------------
+# Date-window helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_date_params(config: dict, lookback_days: int) -> dict:
+    """Return Google CSE date-restriction query params for this config.
+
+    For "last" / "hours" windows we use ``dateRestrict=d{n}``. For the explicit
+    "range" window we use ``sort=date:r:YYYYMMDD:YYYYMMDD`` with ``date_to``
+    defaulting to today when omitted.
+    """
+    if config.get("search_window") == "range":
+        df_raw = (config.get("date_from") or "").strip()
+        dt_raw = (config.get("date_to") or "").strip()
+        try:
+            df = date.fromisoformat(df_raw) if df_raw else None
+        except ValueError:
+            df = None
+        if df is None:
+            # Schema validation should prevent this; fall back to a relative window.
+            return {"dateRestrict": f"d{max(1, lookback_days)}"}
+        try:
+            dt = date.fromisoformat(dt_raw) if dt_raw else date.today()
+        except ValueError:
+            dt = date.today()
+        return {"sort": f"date:r:{df.strftime('%Y%m%d')}:{dt.strftime('%Y%m%d')}"}
+    return {"dateRestrict": f"d{max(1, lookback_days)}"}
 
 
 async def _compute_lookback(
     db: AsyncSession, search_id: UUID, current_run_id: UUID, config: dict
 ) -> int:
-    """Return the lookback window in days based on the search config."""
+    """Return the lookback window in days for relative search windows."""
     from app.models.run import RunStatus as RS
 
     search_window = config.get("search_window", "last")
     fallback_hours = int(config.get("fallback_hours", DEFAULT_LOOKBACK_HOURS))
 
     if search_window == "hours":
+        return max(1, ceil(fallback_hours / 24))
+
+    # Explicit date ranges do not need a lookback; the caller will pick the
+    # sort= param. Returning fallback as a no-op default keeps the contract simple.
+    if search_window == "range":
         return max(1, ceil(fallback_hours / 24))
 
     # "last" — find most recent prior completed run for this search
@@ -202,7 +257,7 @@ async def _fetch_page(
     engine_id: str,
     query: str,
     start: int,
-    days: int,
+    date_params: dict,
 ) -> tuple[list[dict], bool, str | None]:
     params = {
         "key": api_key,
@@ -210,7 +265,7 @@ async def _fetch_page(
         "q": query,
         "num": 10,
         "start": start,
-        "dateRestrict": f"d{max(1, days)}",
+        **date_params,
     }
     try:
         resp = await client.get(GOOGLE_CSE_URL, params=params, timeout=30.0)
@@ -317,6 +372,7 @@ async def _execute_run_inner(run_id: UUID, db: AsyncSession) -> None:
     languages = {str(lang.id): lang for lang in lang_rows}
 
     days = await _compute_lookback(db, search.id, run.id, config)
+    date_params = _build_date_params(config, days)
     specs = _build_query_specs(config, list(all_outlets), languages)
 
     if not specs:
@@ -337,10 +393,11 @@ async def _execute_run_inner(run_id: UUID, db: AsyncSession) -> None:
                 break
 
             pages = max(1, min(MAX_PAGES, spec.pages))
+            applicable_outlets = _filter_outlets_by_lang(spec.outlets, spec.iso_code)
 
-            if spec.outlets:
+            if applicable_outlets:
                 # Run the query against each outlet domain
-                for outlet in spec.outlets:
+                for outlet in applicable_outlets:
                     if quota_hit:
                         break
                     domain = _normalise_domain(outlet.domain)
@@ -348,7 +405,7 @@ async def _execute_run_inner(run_id: UUID, db: AsyncSession) -> None:
                     for page in range(pages):
                         start = page * 10 + 1
                         items, quota, err = await _fetch_page(
-                            client, api_key, engine_id, full_query, start, days
+                            client, api_key, engine_id, full_query, start, date_params
                         )
                         api_calls_used += 1
 
@@ -382,7 +439,7 @@ async def _execute_run_inner(run_id: UUID, db: AsyncSession) -> None:
                         break
                     start = page * 10 + 1
                     items, quota, err = await _fetch_page(
-                        client, api_key, engine_id, spec.query, start, days
+                        client, api_key, engine_id, spec.query, start, date_params
                     )
                     api_calls_used += 1
 
@@ -398,7 +455,7 @@ async def _execute_run_inner(run_id: UUID, db: AsyncSession) -> None:
                         break
 
                     new_rows = _make_result_rows(
-                        items, run.id, "Web", spec.query, seen_urls
+                        items, run.id, "", spec.query, seen_urls
                     )
                     if new_rows:
                         db.add_all(new_rows)

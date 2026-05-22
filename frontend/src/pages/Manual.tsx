@@ -48,11 +48,12 @@ University Name option of a search.
 
 A default English entry ("Kobe University") is seeded for every new account.
 
-### 2.1 Bulk import
+### 2.1 Bulk import / export
 
 Click **Template** to download a starter CSV. Columns: \`iso_code\` (uppercase)
 and \`university_name\`. Upload with **Import — Add** to merge new rows into
-your list, or **Import — Replace all** to wipe your list first.
+your list, or **Import — Replace all** to wipe your list first. Use **Download
+CSV** to export your current language list in the same import-compatible shape.
 
 If a row uses an ISO code not in the supported list, you'll be prompted to pick
 a valid language for each affected row. If a row duplicates a language you've
@@ -69,25 +70,43 @@ A **Search** is a named bundle of terms, options, and outlets. Open **Searches**
 create a new one, then fill in the five sections:
 
 ### 3.1 Search from (search window)
-Choose whether each run looks back to the **last successful run** of this search
-(default) or a fixed number of **previous hours**. When "From last search" is
-active but no prior run exists, the "Previous hours" value is used as a fallback.
+Three modes:
+
+- **Last successful run** (default) — looks back to the start of the most recent
+  successful run of this search. The "fallback hours" value below kicks in on the
+  very first run.
+- **Previous hours** — fixed lookback in hours.
+- **Date range** — restrict results to a publication-date window. Enter a
+  **From** date; **To** is optional (blank = up to today). For a single day,
+  enter the same date in both fields. Maps to Google CSE's
+  \`sort=date:r:YYYYMMDD:YYYYMMDD\` parameter.
 
 ### 3.2 Search terms
-Add one or more free-text terms. Each row has:
-
-- The term text.
-- A logical operator (**AND / OR / NOT**) applied between this term and the
-  previous one. The first term has no operator.
-- A **Number** of result pages to fetch (1–10; 10 results per page = one API call).
+Add one or more free-text terms. Each row has the term text and a logical
+operator (**AND / OR / NOT**) applied between this term and the previous one;
+the first term has no operator. All terms are concatenated into **one** combined
+Google query, so the **Pages** picker at the bottom of the section applies once
+to that combined query (1–10; 10 results per page = one API call).
 
 ### 3.3 DOI
-Optional. Paste a DOI string here to search for a specific paper. It behaves as
-an additional OR-linked term with its own page count.
+Optional. Paste a DOI string here to search for a specific paper. It is **always
+a standalone query**, unaffected by the term operators above, and has its own
+page count.
 
 ### 3.4 University name (toggle, off by default)
-When enabled, expands to a checklist of your defined languages. Each selected
-language generates one query using the university name in that language.
+When enabled, expands to a checklist of your defined languages, plus a **Pages
+per language** picker. The university-name option behaves as an **AND constraint**
+on the combined search-terms query, issued as a **separate Google query per
+selected language**:
+
+\`\`\`
+(combined terms) AND "<university name in language N>"
+\`\`\`
+
+With three active languages, three queries are issued, each fetching the
+configured number of pages. If the terms section is empty, the queries are simply
+\`"<university name in language N>"\` — useful for a wide "anything mentioning the
+university in any language" net.
 
 ### 3.5 Outlets (toggle, off by default)
 When enabled, shows your outlet library grouped by category. Each category has
@@ -112,8 +131,9 @@ From the **Dashboard**, the **Searches** page, or **Run History**, trigger a run
 You land on the **Run Detail** page; results appear as Google returns them.
 
 ### 4.1 Review and export
-Each hit shows the title, snippet, outlet, detected language, and an extracted
-date. Tick the rows you want and click **Export CSV**.
+Each hit shows the title, snippet, the **source host** (e.g. \`bbc.com\`, derived
+from the result URL with any \`www.\` prefix stripped), the detected language,
+and an extracted date. Tick the rows you want and click **Export CSV**.
 
 CSV format: \`Date, Media, Language, Headline, URL\` — UTF-8 with BOM, ready for
 Excel.
@@ -148,8 +168,9 @@ The **Outlets** page is your personal library of media outlets. Each outlet has:
 
 ### 6.1 Bulk import / export
 Click **Template** to download a CSV template. Upload a CSV with **Import — Add**
-(merges) or **Import — Replace all** (wipes first). Export your library as CSV
-with **Export**.
+(merges) or **Import — Replace all** (wipes first). Click **Download CSV** to
+export your current outlet library in the same import-compatible shape — useful
+for sharing a definition with a coworker.
 
 CSV columns: \`name\`, \`domain\`, \`category\`, \`keyword_langs\` (comma-separated ISO
 codes), \`notes\` (ignored on import).

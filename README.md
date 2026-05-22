@@ -16,16 +16,18 @@ Kobe University; usable by any organisation.
   Google API credentials.
 - **Per-user encrypted credentials**: Google Custom Search API key + Search Engine ID
   are stored encrypted (Fernet) and never returned in any response.
-- **Multilingual search**: one search term per language (English, German, French,
-  Spanish, Italian, Portuguese, Russian, Chinese, Korean, Japanese) — Google CSE is
-  queried separately per outlet × language.
-- **Auto-windowed**: each run automatically looks back to the most recent successful
-  run for the same search (default 7 days on first run).
+- **Multilingual search**: user-defined university-name variations per BCP-47
+  language; when enabled, the terms query is AND-constrained against the university
+  name and a separate Google CSE query is issued per active language.
+- **Three time windows**: search since the last successful run, look back N hours,
+  or restrict to an explicit `date_from` / `date_to` range (e.g. press-release
+  pickup monitoring).
 - **Background execution + live status**: runs execute asynchronously; the UI polls
   the run-detail endpoint and renders results as they come in.
 - **CSV export**: pick the results you want, optionally roll in selections from prior
   runs, and download a UTF-8 CSV with BOM + RFC 4180 quoting (Excel-friendly).
-- **Bulk outlet import / export**: XLSX template with validation report.
+- **Bulk CSV import / export** for both Outlets and Languages, with a preview /
+  duplicate-resolution flow and per-row resolution.
 - **Webhook trigger**: external systems can start runs via an API key endpoint.
 - **Admin console**: create / activate / deactivate / delete users; bootstrap admin
   on first start.
@@ -45,7 +47,7 @@ Kobe University; usable by any organisation.
 | HTTP client      | `httpx` (async, used for Google CSE)                    |
 | Frontend         | React 18 + TypeScript + Vite + Tailwind CSS             |
 | Encryption       | `cryptography` (Fernet) — for stored Google API keys    |
-| Spreadsheets     | `openpyxl`                                              |
+| Spreadsheets     | Python stdlib `csv` (UTF-8 BOM, RFC 4180 quoting)       |
 
 ---
 
@@ -130,10 +132,13 @@ After the first deployment, future updates are a single command:
 
 ## API documentation
 
-Interactive Swagger UI is available at `/docs` and OpenAPI JSON at `/openapi.json` on
-the live server. The REST endpoints sit under `/api/v1/…` and use bearer JWT
-authentication for everything except `/auth/login`, `/auth/forgot-password`,
-`/auth/reset-password`, and `/webhook/run` (which uses `X-API-Key` instead).
+The interactive `/docs`, `/redoc`, and `/openapi.json` endpoints are **disabled
+in production** so the schema is not exposed. To inspect the API surface, run
+the app locally with `docs_url` re-enabled or dump the schema via
+`python -c "from app.main import app; print(app.openapi())"`. REST endpoints sit
+under `/api/v1/…` and use bearer JWT authentication for everything except
+`/auth/login`, `/auth/forgot-password`, `/auth/reset-password`, and
+`/webhook/run` (which uses `X-API-Key` instead).
 
 ---
 

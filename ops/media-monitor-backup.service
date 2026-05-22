@@ -1,0 +1,28 @@
+[Unit]
+Description=Media Monitor — daily PostgreSQL dump
+After=postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=oneshot
+User=deploy
+Group=deploy
+# Read PGPASSWORD from a root-readable env-file that only deploy can read.
+# Install:
+#   sudo install -o deploy -g deploy -m 0600 ops/media-monitor-backup.env.example \
+#        /etc/media-monitor/backup.env
+#   sudo $EDITOR /etc/media-monitor/backup.env   # set PGPASSWORD=…
+EnvironmentFile=/etc/media-monitor/backup.env
+ExecStartPre=/bin/mkdir -p /var/backups/media_monitor
+ExecStart=/usr/bin/bash -c '\
+    /usr/bin/pg_dump -h localhost -U media_monitor_user -d media_monitor -Fc \
+        > /var/backups/media_monitor/media_monitor_$(date -u +%%Y%%m%%d).dump.tmp && \
+    mv /var/backups/media_monitor/media_monitor_$(date -u +%%Y%%m%%d).dump.tmp \
+       /var/backups/media_monitor/media_monitor_$(date -u +%%Y%%m%%d).dump'
+# Retain the most recent 14 daily dumps, prune older ones.
+ExecStartPost=/usr/bin/bash -c '\
+    ls -1t /var/backups/media_monitor/media_monitor_*.dump 2>/dev/null \
+        | tail -n +15 | xargs -r rm -f'
+
+[Install]
+WantedBy=multi-user.target

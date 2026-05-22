@@ -267,22 +267,55 @@ function SearchEditor({
             />
             Previous hours
           </label>
-        </div>
-        <div className="mt-2 flex items-center gap-2 text-sm">
-          <label className="text-slate-600">
-            {config.search_window === "last" ? "Fallback hours:" : "Hours to look back:"}
+          <label className="flex items-center gap-2">
+            <input
+              type="radio"
+              name={`sw-${searchId}`}
+              checked={config.search_window === "range"}
+              onChange={() => setConfig({ ...config, search_window: "range" })}
+            />
+            Date range
           </label>
-          <input
-            type="number"
-            min={1}
-            max={8760}
-            className="input w-24"
-            value={config.fallback_hours}
-            onChange={(e) =>
-              setConfig({ ...config, fallback_hours: Math.max(1, parseInt(e.target.value || "1", 10)) })
-            }
-          />
         </div>
+        {config.search_window === "range" ? (
+          <div className="mt-2 flex flex-wrap items-end gap-3 text-sm">
+            <div>
+              <label className="mb-1 block text-xs text-slate-500">From</label>
+              <input
+                type="date"
+                className="input w-44"
+                value={config.date_from}
+                onChange={(e) => setConfig({ ...config, date_from: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-slate-500">To (optional)</label>
+              <input
+                type="date"
+                className="input w-44"
+                value={config.date_to}
+                onChange={(e) => setConfig({ ...config, date_to: e.target.value })}
+              />
+              <p className="mt-1 text-xs text-slate-500">Leave blank for up to today.</p>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-2 flex items-center gap-2 text-sm">
+            <label className="text-slate-600">
+              {config.search_window === "last" ? "Fallback hours:" : "Hours to look back:"}
+            </label>
+            <input
+              type="number"
+              min={1}
+              max={8760}
+              className="input w-24"
+              value={config.fallback_hours}
+              onChange={(e) =>
+                setConfig({ ...config, fallback_hours: Math.max(1, parseInt(e.target.value || "1", 10)) })
+              }
+            />
+          </div>
+        )}
       </Section>
 
       {/* §2 Terms */}
@@ -310,20 +343,43 @@ function SearchEditor({
             <p className="text-sm text-slate-500">No terms yet. Add one below.</p>
           )}
         </div>
-        <button
-          className="btn-ghost mt-2 text-sm"
-          onClick={() => {
-            const newTerm: SearchTermConfig = {
-              id: crypto.randomUUID(),
-              text: "",
-              operator: config.terms.length === 0 ? null : "OR",
-              pages: 1,
-            };
-            setConfig({ ...config, terms: [...config.terms, newTerm] });
-          }}
-        >
-          + Add term
-        </button>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <button
+            className="btn-ghost text-sm"
+            onClick={() => {
+              const newTerm: SearchTermConfig = {
+                id: crypto.randomUUID(),
+                text: "",
+                operator: config.terms.length === 0 ? null : "OR",
+              };
+              setConfig({ ...config, terms: [...config.terms, newTerm] });
+            }}
+          >
+            + Add term
+          </button>
+          <div className="ml-auto flex items-center gap-2 text-xs text-slate-500">
+            <label className="whitespace-nowrap">Pages</label>
+            <input
+              type="number"
+              min={1}
+              max={10}
+              className="input w-16"
+              value={config.terms_pages}
+              onChange={(e) =>
+                setConfig({
+                  ...config,
+                  terms_pages: Math.max(1, Math.min(10, parseInt(e.target.value || "1", 10))),
+                })
+              }
+            />
+            <span
+              className="text-slate-400"
+              title="Page count applied to the combined search-terms query (10 results per page)."
+            >
+              ⓘ
+            </span>
+          </div>
+        </div>
       </Section>
 
       {/* §3 DOI */}
@@ -433,10 +489,38 @@ function SearchEditor({
                     })}
                   </ul>
                 </div>
-                <p className="mt-1 text-xs text-slate-500">
-                  {config.university_name.language_ids.length} of {languages.length} languages
-                  selected.
-                </p>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                  <span className="flex-1">
+                    {config.university_name.language_ids.length} of {languages.length} languages
+                    selected.
+                  </span>
+                  <label className="whitespace-nowrap">Pages per language</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={10}
+                    className="input w-16"
+                    value={config.university_name.pages}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        university_name: {
+                          ...config.university_name,
+                          pages: Math.max(
+                            1,
+                            Math.min(10, parseInt(e.target.value || "1", 10)),
+                          ),
+                        },
+                      })
+                    }
+                  />
+                  <span
+                    className="text-slate-400"
+                    title="Page count applied to each per-language university-name query (10 results per page)."
+                  >
+                    ⓘ
+                  </span>
+                </div>
               </>
             )}
           </>
@@ -638,19 +722,6 @@ function TermRow({
         value={term.text}
         onChange={(e) => onChange({ ...term, text: e.target.value })}
       />
-      <div className="flex items-center gap-1">
-        <label className="text-xs text-slate-500 whitespace-nowrap">Pages</label>
-        <input
-          type="number"
-          min={1}
-          max={10}
-          className="input w-16"
-          value={term.pages}
-          onChange={(e) =>
-            onChange({ ...term, pages: Math.max(1, Math.min(10, parseInt(e.target.value || "1", 10))) })
-          }
-        />
-      </div>
       <button
         className="text-slate-400 hover:text-red-600 transition-colors px-1"
         onClick={onRemove}

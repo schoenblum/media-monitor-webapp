@@ -1,0 +1,14 @@
+[Unit]
+Description=Run media-monitor-backup.service once a day
+Requires=media-monitor-backup.service
+
+[Timer]
+# Run daily at 03:17 UTC; randomise within an hour so backups don't all hammer
+# disk at the same instant if multiple timers are installed on the host.
+OnCalendar=*-*-* 03:17:00 UTC
+RandomizedDelaySec=1h
+Persistent=true
+Unit=media-monitor-backup.service
+
+[Install]
+WantedBy=timers.target
