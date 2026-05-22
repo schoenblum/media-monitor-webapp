@@ -21,6 +21,11 @@ class UserCreate(UserBase):
 class UserUpdate(BaseModel):
     is_active: bool | None = None
     role: UserRole | None = None
+    # Admin-only: assign / move / unaffiliate. Use the explicit
+    # ``set_university`` field rather than relying on a ``UUID | None`` value
+    # because Pydantic's exclude_unset can't tell "set to null" from "omitted".
+    set_university: bool = False
+    university_id: UUID | None = None
 
 
 class UserSelfUpdate(BaseModel):
@@ -42,6 +47,8 @@ class UserOut(BaseModel):
     has_google_key: bool = False
     has_engine_id: bool = False
     has_webhook_key: bool = False
+    university_id: UUID | None = None
+    university_name: str | None = None
 
 
 class AdminCreateUserResponse(BaseModel):

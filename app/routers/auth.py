@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import get_db
 from app.deps import get_current_user
+from app.models.university import University
 from app.models.user import PasswordResetToken, User
 from app.schemas.auth import (
     ChangePasswordRequest,
@@ -105,7 +106,14 @@ async def reset_password(payload: ResetPasswordRequest, db: AsyncSession = Depen
 
 
 @router.get("/me", response_model=UserOut)
-async def me(current: User = Depends(get_current_user)) -> UserOut:
+async def me(
+    current: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserOut:
+    university_name: str | None = None
+    if current.university_id is not None:
+        uni = await db.get(University, current.university_id)
+        university_name = uni.name if uni else None
     return UserOut(
         id=current.id,
         email=current.email,
@@ -118,4 +126,6 @@ async def me(current: User = Depends(get_current_user)) -> UserOut:
         has_google_key=current.google_api_key_encrypted is not None,
         has_engine_id=current.search_engine_id_encrypted is not None,
         has_webhook_key=current.webhook_api_key_hash is not None,
+        university_id=current.university_id,
+        university_name=university_name,
     )

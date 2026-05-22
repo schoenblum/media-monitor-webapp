@@ -1,4 +1,4 @@
-"""Outlet CRUD plus CSV bulk import / export endpoints."""
+"""Outlet CRUD plus CSV bulk import / export endpoints (affiliation-aware)."""
 import csv
 import io
 from uuid import UUID
@@ -15,7 +15,7 @@ from app.models.user import User
 from app.schemas.outlet import (
     ImportReport,
     ImportReportRow,
-    OutletCommitItem,
+    OutletCommitItem,  # noqa: F401  (re-exported via OutletCommitRequest)
     OutletCommitRequest,
     OutletCommitReport,
     OutletCreate,
@@ -27,6 +27,11 @@ from app.schemas.outlet import (
     _DOMAIN_RE,
 )
 from app.schemas.outlet import _clean_domain  # type: ignore[attr-defined]
+from app.services.scoping import (
+    can_modify_shared_row,
+    shared_read_filter,
+    shared_write_owner,
+)
 
 
 router = APIRouter(prefix="/outlets", tags=["outlets"])
@@ -38,6 +43,13 @@ def _outlet_to_out(o: Outlet) -> OutletOut:
     return OutletOut.model_validate(o)
 
 
+async def _existing_by_domain(db: AsyncSession, current: User) -> dict[str, Outlet]:
+    rows = (
+        await db.execute(select(Outlet).where(shared_read_filter(Outlet, current)))
+    ).scalars().all()
+    return {o.domain: o for o in rows}
+
+
 @router.get("", response_model=list[OutletOut])
 async def list_outlets(
     category: str | None = None,
@@ -45,7 +57,7 @@ async def list_outlets(
     current: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[OutletOut]:
-    stmt = select(Outlet).where(Outlet.user_id == current.id)
+    stmt = select(Outlet).where(shared_read_filter(Outlet, current))
     if category:
         stmt = stmt.where(Outlet.category == category)
     if active is not None:
@@ -61,17 +73,14 @@ async def create_outlet(
     current: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> OutletOut:
-    existing = (
-        await db.execute(
-            select(Outlet).where(Outlet.user_id == current.id, Outlet.domain == payload.domain)
-        )
-    ).scalar_one_or_none()
-    if existing is not None:
+    existing = await _existing_by_domain(db, current)
+    if payload.domain in existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="An outlet with that domain already exists"
         )
     o = Outlet(
         user_id=current.id,
+        university_id=shared_write_owner(current),
         name=payload.name.strip(),
         domain=payload.domain,
         category=payload.category,
@@ -92,22 +101,16 @@ async def update_outlet(
     db: AsyncSession = Depends(get_db),
 ) -> OutletOut:
     o = await db.get(Outlet, outlet_id)
-    if o is None or o.user_id != current.id:
+    if o is None or not can_modify_shared_row(o, current):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Outlet not found")
     data = payload.model_dump(exclude_unset=True)
-    if "domain" in data and data["domain"]:
-        if data["domain"] != o.domain:
-            clash = (
-                await db.execute(
-                    select(Outlet).where(
-                        Outlet.user_id == current.id, Outlet.domain == data["domain"]
-                    )
-                )
-            ).scalar_one_or_none()
-            if clash is not None and clash.id != o.id:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT, detail="Domain already used by another outlet"
-                )
+    if "domain" in data and data["domain"] and data["domain"] != o.domain:
+        existing = await _existing_by_domain(db, current)
+        clash = existing.get(data["domain"])
+        if clash is not None and clash.id != o.id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="Domain already used by another outlet"
+            )
     for key, value in data.items():
         setattr(o, key, value)
     await db.commit()
@@ -134,7 +137,9 @@ async def bulk_delete_outlets(
         return
     rows = (
         await db.execute(
-            select(Outlet).where(Outlet.id.in_(ids), Outlet.user_id == current.id)
+            select(Outlet).where(
+                Outlet.id.in_(ids), shared_read_filter(Outlet, current)
+            )
         )
     ).scalars().all()
     for o in rows:
@@ -149,7 +154,7 @@ async def delete_outlet(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     o = await db.get(Outlet, outlet_id)
-    if o is None or o.user_id != current.id:
+    if o is None or not can_modify_shared_row(o, current):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Outlet not found")
     await db.delete(o)
     await db.commit()
@@ -191,7 +196,9 @@ async def export_outlets(
 ) -> StreamingResponse:
     rows = (
         await db.execute(
-            select(Outlet).where(Outlet.user_id == current.id).order_by(Outlet.name.asc())
+            select(Outlet)
+            .where(shared_read_filter(Outlet, current))
+            .order_by(Outlet.name.asc())
         )
     ).scalars().all()
     buf = io.StringIO()
@@ -226,7 +233,6 @@ async def import_outlets(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Please upload a .csv file"
         )
     body_bytes = await file.read()
-    # Strip UTF-8 BOM if present
     body_str = body_bytes.decode("utf-8-sig")
     reader = csv.reader(io.StringIO(body_str))
 
@@ -243,20 +249,18 @@ async def import_outlets(
                 detail=f"Missing required column: {required}",
             )
 
+    uni_id = shared_write_owner(current)
+
     if mode == "replace":
         existing_rows = (
-            await db.execute(select(Outlet).where(Outlet.user_id == current.id))
+            await db.execute(select(Outlet).where(shared_read_filter(Outlet, current)))
         ).scalars().all()
         for o in existing_rows:
             await db.delete(o)
         await db.flush()
         existing_domains: set[str] = set()
     else:
-        existing_domains = {
-            d for (d,) in (
-                await db.execute(select(Outlet.domain).where(Outlet.user_id == current.id))
-            ).all()
-        }
+        existing_domains = set((await _existing_by_domain(db, current)).keys())
 
     imported = 0
     skipped: list[ImportReportRow] = []
@@ -296,6 +300,7 @@ async def import_outlets(
         db.add(
             Outlet(
                 user_id=current.id,
+                university_id=uni_id,
                 name=name,
                 domain=domain,
                 category=category,
@@ -382,12 +387,7 @@ async def preview_outlet_import(
     body = await file.read()
     rows, parse_errors = _parse_outlet_csv(body)
 
-    existing_by_domain = {
-        o.domain: o
-        for o in (
-            await db.execute(select(Outlet).where(Outlet.user_id == current.id))
-        ).scalars().all()
-    }
+    existing_by_domain = await _existing_by_domain(db, current)
 
     new_rows: list[OutletPreviewRow] = []
     duplicate_rows: list[OutletDuplicateRow] = []
@@ -438,9 +438,11 @@ async def commit_outlet_import(
     current: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> OutletCommitReport:
+    uni_id = shared_write_owner(current)
+
     if payload.mode == "replace":
         existing = (
-            await db.execute(select(Outlet).where(Outlet.user_id == current.id))
+            await db.execute(select(Outlet).where(shared_read_filter(Outlet, current)))
         ).scalars().all()
         deleted = len(existing)
         for o in existing:
@@ -456,6 +458,7 @@ async def commit_outlet_import(
             db.add(
                 Outlet(
                     user_id=current.id,
+                    university_id=uni_id,
                     name=item.name,
                     domain=item.domain,
                     category=item.category,
@@ -467,19 +470,13 @@ async def commit_outlet_import(
         await db.commit()
         return OutletCommitReport(added=added, replaced=0, deleted=deleted)
 
-    # ADD mode
-    by_domain = {
-        o.domain: o
-        for o in (
-            await db.execute(select(Outlet).where(Outlet.user_id == current.id))
-        ).scalars().all()
-    }
+    by_domain = await _existing_by_domain(db, current)
     added = 0
     replaced = 0
     for item in payload.items:
         if item.replace_existing_id is not None:
             row = await db.get(Outlet, item.replace_existing_id)
-            if row is None or row.user_id != current.id:
+            if row is None or not can_modify_shared_row(row, current):
                 continue
             row.name = item.name
             row.domain = item.domain
@@ -491,6 +488,7 @@ async def commit_outlet_import(
             continue
         new_o = Outlet(
             user_id=current.id,
+            university_id=uni_id,
             name=item.name,
             domain=item.domain,
             category=item.category,

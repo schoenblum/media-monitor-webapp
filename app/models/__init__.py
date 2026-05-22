@@ -4,4 +4,5 @@ from app.models.outlet import Outlet  # noqa: F401
 from app.models.result import Result  # noqa: F401
 from app.models.run import Run, RunStatus, RunTrigger  # noqa: F401
 from app.models.search import Search  # noqa: F401
+from app.models.university import University  # noqa: F401
 from app.models.user import PasswordResetToken, User, UserRole  # noqa: F401

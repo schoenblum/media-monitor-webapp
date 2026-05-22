@@ -11,10 +11,13 @@ import type {
 } from "../api/types";
 import { Spinner } from "../components/Spinner";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { useAuth } from "../auth";
 
 type SortKey = "name" | "domain" | "category" | "is_active";
 
 export default function Outlets() {
+  const { user } = useAuth();
+  const shared = !!user?.university_id;
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [languages, setLanguages] = useState<UniversityLanguage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -212,6 +215,13 @@ export default function Outlets() {
 
   return (
     <div className="space-y-4">
+      {shared && (
+        <div className="rounded-md bg-sky-50 px-3 py-2 text-xs text-sky-900">
+          You are editing the <strong>shared</strong> outlet library for{" "}
+          <strong>{user?.university_name ?? "your university"}</strong>. Changes are
+          immediately visible to every member; last write wins.
+        </div>
+      )}
       <div className="card p-4">
         <h2 className="text-base font-semibold">Add outlet</h2>
         <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[1.2fr_1.4fr_1fr_1.4fr_auto]">

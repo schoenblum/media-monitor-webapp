@@ -6,8 +6,10 @@ import { RunStatusPill } from "../components/RunStatusPill";
 import { Spinner } from "../components/Spinner";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { sourceHostFor } from "../utils/source";
+import { useAuth } from "../auth";
 
 export default function RunHistory() {
+  const { user } = useAuth();
   const [runs, setRuns] = useState<Run[]>([]);
   const [searches, setSearches] = useState<Search[]>([]);
   const [loading, setLoading] = useState(true);
@@ -18,6 +20,7 @@ export default function RunHistory() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [mergeRunIds, setMergeRunIds] = useState<UUID[] | null>(null);
   const nav = useNavigate();
+  const showPerformedBy = !!user?.university_id;
 
   useEffect(() => {
     (async () => {
@@ -109,6 +112,14 @@ export default function RunHistory() {
 
   return (
     <div className="card p-4">
+      {showPerformedBy && (
+        <div className="mb-3 rounded-md bg-sky-50 px-3 py-2 text-xs text-sky-900">
+          Showing <strong>shared</strong> run history for{" "}
+          <strong>{user?.university_name ?? "your university"}</strong>. Any member
+          can view (and toggle result selections on) any run; only the run's performer
+          can delete it.
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="flex-1 text-base font-semibold">Run history</h2>
         <select
@@ -176,6 +187,7 @@ export default function RunHistory() {
               </th>
               <th className="py-2">Started</th>
               <th className="py-2">Search</th>
+              {showPerformedBy && <th className="py-2">Performed by</th>}
               <th className="py-2">Trigger</th>
               <th className="py-2">Status</th>
               <th className="py-2 text-right">Hits</th>
@@ -203,6 +215,18 @@ export default function RunHistory() {
                     {r.search_name ?? "—"}
                   </Link>
                 </td>
+                {showPerformedBy && (
+                  <td
+                    className="py-1.5 text-xs text-slate-600 cursor-pointer"
+                    onClick={() => nav(`/runs/${r.id}`)}
+                  >
+                    {r.user_id === user?.id ? (
+                      <span className="text-slate-900">you</span>
+                    ) : (
+                      r.performed_by_email ?? "—"
+                    )}
+                  </td>
+                )}
                 <td className="py-1.5 text-slate-600 cursor-pointer" onClick={() => nav(`/runs/${r.id}`)}>
                   {r.triggered_by}
                 </td>
@@ -219,7 +243,10 @@ export default function RunHistory() {
             ))}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={7} className="py-6 text-center text-slate-500">
+                <td
+                  colSpan={showPerformedBy ? 8 : 7}
+                  className="py-6 text-center text-slate-500"
+                >
                   No runs match the current filters.
                 </td>
               </tr>

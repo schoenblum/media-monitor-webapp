@@ -62,6 +62,9 @@ async def trigger_via_webhook(
     run = Run(
         user_id=user.id,
         search_id=search.id,
+        # Snapshot the performing user's affiliation, same rule as the manual
+        # trigger (revision_brief_v2.2.md §8.3).
+        university_id=user.university_id,
         triggered_by=RunTrigger.webhook,
         status=RunStatus.pending,
     )

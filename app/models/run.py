@@ -32,6 +32,16 @@ class Run(Base):
     search_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("searches.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    # Snapshot of the performing user's affiliation at run-creation time.
+    # Null = the run was performed while the user was unaffiliated. Runs stay
+    # with the university they were performed under and do NOT migrate when
+    # a user is later reassigned (see revision_brief_v2.2.md §8.3).
+    university_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("universities.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     triggered_by: Mapped[RunTrigger] = mapped_column(
         Enum(RunTrigger, name="run_trigger"), default=RunTrigger.manual, nullable=False
     )

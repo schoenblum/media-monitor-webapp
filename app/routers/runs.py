@@ -1,4 +1,4 @@
-"""Run lifecycle + result selection + CSV export."""
+"""Run lifecycle + result selection + CSV export (affiliation-aware reads)."""
 import csv
 import io
 from typing import Sequence
@@ -23,13 +23,20 @@ from app.schemas.run import (
     RunCreate,
     RunOut,
 )
+from app.services.scoping import shared_read_filter
 from app.services.search_engine import execute_run
 
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
 
-async def _run_to_out(db: AsyncSession, run: Run, *, search_name: str | None = None) -> RunOut:
+async def _run_to_out(
+    db: AsyncSession,
+    run: Run,
+    *,
+    search_name: str | None = None,
+    performer_email: str | None = None,
+) -> RunOut:
     count = (
         await db.execute(select(func.count(Result.id)).where(Result.run_id == run.id))
     ).scalar_one()
@@ -44,7 +51,19 @@ async def _run_to_out(db: AsyncSession, run: Run, *, search_name: str | None = N
         error_message=run.error_message,
         search_name=search_name,
         result_count=int(count or 0),
+        user_id=run.user_id,
+        university_id=run.university_id,
+        performed_by_email=performer_email,
     )
+
+
+async def _can_view_run(run: Run, current: User) -> bool:
+    """A run is visible if the user owns it OR shares its affiliation snapshot."""
+    if run.user_id == current.id:
+        return True
+    if current.university_id is not None and run.university_id == current.university_id:
+        return True
+    return False
 
 
 @router.get("", response_model=list[RunOut])
@@ -55,9 +74,10 @@ async def list_runs(
     db: AsyncSession = Depends(get_db),
 ) -> list[RunOut]:
     stmt = (
-        select(Run, Search.name)
+        select(Run, Search.name, User.email)
         .join(Search, Search.id == Run.search_id)
-        .where(Run.user_id == current.id)
+        .join(User, User.id == Run.user_id)
+        .where(shared_read_filter(Run, current))
         .order_by(Run.started_at.desc())
     )
     if search_id is not None:
@@ -66,8 +86,10 @@ async def list_runs(
         stmt = stmt.where(Run.status == status_filter)
     rows = (await db.execute(stmt)).all()
     out: list[RunOut] = []
-    for run, name in rows:
-        out.append(await _run_to_out(db, run, search_name=name))
+    for run, name, email in rows:
+        out.append(
+            await _run_to_out(db, run, search_name=name, performer_email=email)
+        )
     return out
 
 
@@ -78,6 +100,8 @@ async def trigger_run(
     current: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> RunOut:
+    # Searches remain user-private even with affiliation, so the existing
+    # ownership check still applies.
     search = await db.get(Search, payload.search_id)
     if search is None or search.user_id != current.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Search not found")
@@ -95,6 +119,9 @@ async def trigger_run(
     run = Run(
         user_id=current.id,
         search_id=search.id,
+        # Snapshot affiliation at run-creation time (§8.3). The run stays with
+        # this university even if the user is later reassigned.
+        university_id=current.university_id,
         triggered_by=RunTrigger.manual,
         status=RunStatus.pending,
     )
@@ -102,7 +129,9 @@ async def trigger_run(
     await db.commit()
     await db.refresh(run)
     background.add_task(execute_run, run.id)
-    return await _run_to_out(db, run, search_name=search.name)
+    return await _run_to_out(
+        db, run, search_name=search.name, performer_email=current.email
+    )
 
 
 @router.get("/merged", response_model=ResultsPage)
@@ -116,14 +145,14 @@ async def get_merged_results(
     """Return deduplicated results from multiple runs (temporary merge, not persisted)."""
     if not run_ids:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No run_ids provided")
-    owned = (
+    runs = (
         await db.execute(
-            select(Run.id).where(Run.id.in_(run_ids), Run.user_id == current.id)
+            select(Run).where(Run.id.in_(run_ids), shared_read_filter(Run, current))
         )
     ).scalars().all()
-    owned_set = set(owned)
+    visible_ids = {r.id for r in runs}
     for rid in run_ids:
-        if rid not in owned_set:
+        if rid not in visible_ids:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail=f"Not authorised for run {rid}"
             )
@@ -136,7 +165,6 @@ async def get_merged_results(
         )
     ).scalars().all()
 
-    # Deduplicate by URL, preserving order
     seen_urls: set[str] = set()
     deduplicated: list[Result] = []
     for r in all_results:
@@ -162,20 +190,17 @@ async def export_runs(
     current: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> StreamingResponse:
-    """Export all `is_selected=true` results across the given runs as a single CSV.
-
-    Sorted by `date_extracted` descending, with empty dates pushed to the end.
-    """
+    """Export all `is_selected=true` results across the given runs as a single CSV."""
     if not run_ids:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No run_ids provided")
-    owned = (
+    runs = (
         await db.execute(
-            select(Run.id).where(Run.id.in_(run_ids), Run.user_id == current.id)
+            select(Run).where(Run.id.in_(run_ids), shared_read_filter(Run, current))
         )
     ).scalars().all()
-    owned_set = set(owned)
+    visible_ids = {r.id for r in runs}
     for rid in run_ids:
-        if rid not in owned_set:
+        if rid not in visible_ids:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail=f"Not authorised for run {rid}"
             )
@@ -187,11 +212,9 @@ async def export_runs(
     ).scalars().all()
 
     def _date_key(r: Result) -> tuple[int, str]:
-        # Empty dates -> push last (sort tuple: presence flag, date string).
         return (0 if r.date_extracted else 1, r.date_extracted or "")
 
     rows_sorted: Sequence[Result] = sorted(rows, key=_date_key)
-    # We want date descending. Stable sort on (-present, date desc) easier in two passes:
     rows_sorted = sorted(rows_sorted, key=lambda r: r.date_extracted or "", reverse=True)
     rows_sorted = sorted(rows_sorted, key=lambda r: 0 if r.date_extracted else 1)
 
@@ -226,10 +249,16 @@ async def get_run(
     db: AsyncSession = Depends(get_db),
 ) -> RunOut:
     run = await db.get(Run, run_id)
-    if run is None or run.user_id != current.id:
+    if run is None or not await _can_view_run(run, current):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     search = await db.get(Search, run.search_id)
-    return await _run_to_out(db, run, search_name=search.name if search else None)
+    performer = await db.get(User, run.user_id)
+    return await _run_to_out(
+        db,
+        run,
+        search_name=search.name if search else None,
+        performer_email=performer.email if performer else None,
+    )
 
 
 @router.get("/{run_id}/results", response_model=ResultsPage)
@@ -243,7 +272,7 @@ async def get_results(
     db: AsyncSession = Depends(get_db),
 ) -> ResultsPage:
     run = await db.get(Run, run_id)
-    if run is None or run.user_id != current.id:
+    if run is None or not await _can_view_run(run, current):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     stmt = select(Result).where(Result.run_id == run_id)
     if lang:
@@ -274,8 +303,10 @@ async def update_result_selection(
     current: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
+    # Any member who can see the run can toggle selections on it (shared
+    # editing for the review/export workflow). Only the performer can delete.
     run = await db.get(Run, run_id)
-    if run is None or run.user_id != current.id:
+    if run is None or not await _can_view_run(run, current):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     if not payload.result_ids:
         return
@@ -293,6 +324,8 @@ async def delete_run(
     current: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
+    # Only the performer (or a future admin endpoint) can delete a run, so
+    # one member can't blow away another member's run history.
     run = await db.get(Run, run_id)
     if run is None or run.user_id != current.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")

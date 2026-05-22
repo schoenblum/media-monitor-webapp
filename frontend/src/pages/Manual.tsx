@@ -205,7 +205,41 @@ If a key leaks, **Revoke** it immediately.
 
 ---
 
-## 8. FAQ
+## 8. University affiliation (multi-user pools)
+
+Admins can group accounts into a **university**. Affiliated members:
+
+- **Share** the Languages list, the Outlets library, and the run history. Any
+  member can view *and edit* the shared definitions (last-write-wins). Any
+  member can also toggle result selections on any visible run, but only the
+  run's performer can delete it.
+- **Do not share** login credentials, the Google Custom Search API key + CX,
+  or the webhook key. Those stay strictly per-user.
+- See a coloured banner at the top of Languages, Outlets, and Run History
+  while operating in shared mode, plus a chip with the university name in the
+  top-right of every page.
+
+Admin actions (Admin tab):
+
+- Create, rename, and delete universities. Deleting one un-affiliates every
+  member; their shared rows revert to personal ownership (no data is lost).
+- Per-user **Affiliation** dialog assigns / moves / un-affiliates a member.
+  On assignment, the user's non-conflicting personal Languages and Outlets
+  are adopted into the new shared pool. Conflicting personal rows stay
+  user-private (and become invisible to the user while affiliated — they
+  reappear if you un-affiliate).
+- Optionally, on assignment, **duplicate the user's personal run history**
+  into the new university's pool. Originals stay where they were; this is
+  primarily useful when a previously-private user is first migrated into a
+  new affiliation.
+
+The performing user's affiliation is **snapshotted** onto every run at
+creation time. Runs do not migrate on reassignment — they stay in the
+university they were performed under.
+
+---
+
+## 9. FAQ
 
 **Why might a Spanish article show up under "English"?**
 Language detection is statistical (\`langdetect\`). Short or mixed-language snippets

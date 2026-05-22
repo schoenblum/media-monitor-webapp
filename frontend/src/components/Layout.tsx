@@ -11,7 +11,7 @@ const navItems = [
   { to: "/manual", label: "Manual" },
 ];
 
-const APP_VERSION = "2.2.0";
+const APP_VERSION = "2.3.0";
 
 export default function Layout() {
   const { user, logout } = useAuth();
@@ -53,6 +53,14 @@ export default function Layout() {
             )}
           </nav>
           <div className="flex items-center gap-3 text-sm">
+            {user?.university_name && (
+              <span
+                className="hidden md:inline rounded-full bg-white/15 px-2 py-0.5 text-xs"
+                title={`Affiliated with ${user.university_name} — shared Languages, Outlets, run history.`}
+              >
+                {user.university_name}
+              </span>
+            )}
             <span className="hidden md:inline opacity-80">{user?.email}</span>
             <button
               onClick={() => {

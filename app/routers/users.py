@@ -15,6 +15,7 @@ from app.models.outlet import Outlet
 from app.models.result import Result
 from app.models.run import Run
 from app.models.search import Search
+from app.models.university import University
 from app.models.user import User, UserRole
 from app.schemas.user import (
     AdminCreateUserResponse,
@@ -42,7 +43,7 @@ def _smtp_configured() -> bool:
     return bool(s.SMTP_HOST and s.SMTP_FROM)
 
 
-def _user_to_out(u: User) -> UserOut:
+def _user_to_out(u: User, *, university_name: str | None = None) -> UserOut:
     return UserOut(
         id=u.id,
         email=u.email,
@@ -55,15 +56,32 @@ def _user_to_out(u: User) -> UserOut:
         has_google_key=u.google_api_key_encrypted is not None,
         has_engine_id=u.search_engine_id_encrypted is not None,
         has_webhook_key=u.webhook_api_key_hash is not None,
+        university_id=u.university_id,
+        university_name=university_name,
     )
+
+
+async def _name_for(
+    db: AsyncSession, university_id: UUID | None
+) -> str | None:
+    if university_id is None:
+        return None
+    uni = await db.get(University, university_id)
+    return uni.name if uni else None
 
 
 @router.get("", response_model=list[UserOut])
 async def list_users(
     _: User = Depends(require_admin), db: AsyncSession = Depends(get_db)
 ) -> list[UserOut]:
-    rows = (await db.execute(select(User).order_by(User.created_at.desc()))).scalars().all()
-    return [_user_to_out(u) for u in rows]
+    rows = (
+        await db.execute(
+            select(User, University.name)
+            .outerjoin(University, University.id == User.university_id)
+            .order_by(User.created_at.desc())
+        )
+    ).all()
+    return [_user_to_out(u, university_name=name) for u, name in rows]
 
 
 @router.post("", response_model=AdminCreateUserResponse, status_code=status.HTTP_201_CREATED)
@@ -303,9 +321,98 @@ async def update_user(
                 detail="You cannot demote your own account.",
             )
         target.role = payload.role
+    # Affiliation assign / move / unaffiliate. We require an explicit
+    # ``set_university`` flag so the caller can disambiguate "clear" (null)
+    # from "no change" (field absent). Per §8.3 existing runs do NOT migrate
+    # — they keep their snapshotted university_id.
+    if payload.set_university:
+        if payload.university_id is not None:
+            uni = await db.get(University, payload.university_id)
+            if uni is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Target university not found",
+                )
+        old_university_id = target.university_id
+        target.university_id = payload.university_id
+        await db.flush()
+        # On assignment *into* a university, adopt the user's existing
+        # personal Languages and Outlets into the new shared pool — but
+        # only where they do not conflict with rows already shared by the
+        # university. Conflicting personals stay user-private (and become
+        # invisible to the user while affiliated, which is fine; they can
+        # still be retrieved by un-affiliating).
+        if (
+            payload.university_id is not None
+            and old_university_id != payload.university_id
+        ):
+            await _adopt_personal_into_university(db, target.id, payload.university_id)
     await db.commit()
     await db.refresh(target)
-    return _user_to_out(target)
+    name = await _name_for(db, target.university_id)
+    return _user_to_out(target, university_name=name)
+
+
+async def _adopt_personal_into_university(
+    db: AsyncSession, user_id: UUID, university_id: UUID
+) -> None:
+    """Adopt non-conflicting personal Languages/Outlets into the target university.
+
+    Implements the assignment-time data carry-over described in
+    ``revision_brief_v2.2.md`` §8.6 ("first user of a new university") in a
+    way that also handles the "joining an existing university" case
+    gracefully: rows whose iso_code or domain already exists in the shared
+    pool are left as user-private orphans rather than failing the
+    assignment with a uniqueness violation.
+    """
+    # Languages
+    personal_langs = (
+        await db.execute(
+            select(UniversityLanguage).where(
+                UniversityLanguage.user_id == user_id,
+                UniversityLanguage.university_id.is_(None),
+            )
+        )
+    ).scalars().all()
+    if personal_langs:
+        existing_isos = {
+            iso
+            for (iso,) in (
+                await db.execute(
+                    select(UniversityLanguage.iso_code).where(
+                        UniversityLanguage.university_id == university_id
+                    )
+                )
+            ).all()
+        }
+        for row in personal_langs:
+            if row.iso_code not in existing_isos:
+                row.university_id = university_id
+                existing_isos.add(row.iso_code)
+
+    # Outlets
+    personal_outlets = (
+        await db.execute(
+            select(Outlet).where(
+                Outlet.user_id == user_id, Outlet.university_id.is_(None)
+            )
+        )
+    ).scalars().all()
+    if personal_outlets:
+        existing_domains = {
+            d
+            for (d,) in (
+                await db.execute(
+                    select(Outlet.domain).where(Outlet.university_id == university_id)
+                )
+            ).all()
+        }
+        for row in personal_outlets:
+            if row.domain not in existing_domains:
+                row.university_id = university_id
+                existing_domains.add(row.domain)
+
+    await db.flush()
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

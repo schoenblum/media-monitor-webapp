@@ -1,6 +1,18 @@
-"""First-run bootstrap — seed admin account, default outlets, and university language."""
+"""First-run bootstrap — seed admin account, default outlets, and university language.
+
+Affiliation-aware seeding rules (revision_brief_v2.2.md §8.6):
+
+1. **Unaffiliated new user** — seed a private default library + EN language
+   entry + a default Search, exactly as in v2.1.
+2. **New user joining an affiliation with existing shared definitions** —
+   do *not* re-seed Languages or Outlets (they inherit the shared pool).
+   A personal default Search is still created, pre-pointing to the shared
+   language and any outlets.
+3. **First user of a brand-new affiliation** — seed Languages and Outlets
+   into the university's shared pool (``university_id`` set), so the
+   affiliation starts populated. A personal default Search is also created.
+"""
 import logging
-import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,60 +31,114 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-async def seed_user_defaults(db: AsyncSession, user: User) -> None:
-    """Seed the default outlet library, a university language entry, and a default Search."""
-    existing = (
-        await db.execute(select(Outlet.id).where(Outlet.user_id == user.id).limit(1))
+async def _affiliation_has_outlets(db: AsyncSession, university_id) -> bool:
+    if university_id is None:
+        return False
+    row = (
+        await db.execute(
+            select(Outlet.id).where(Outlet.university_id == university_id).limit(1)
+        )
     ).first()
-    if existing is not None:
+    return row is not None
+
+
+async def _affiliation_default_language(
+    db: AsyncSession, university_id
+) -> UniversityLanguage | None:
+    if university_id is None:
+        return None
+    return (
+        await db.execute(
+            select(UniversityLanguage)
+            .where(UniversityLanguage.university_id == university_id)
+            .order_by(UniversityLanguage.created_at.asc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def seed_user_defaults(db: AsyncSession, user: User) -> None:
+    """Seed defaults for ``user`` per the affiliation rules in this module's docstring."""
+    # If the user already has personal data, do nothing (idempotent).
+    existing_personal = (
+        await db.execute(
+            select(Outlet.id)
+            .where(Outlet.user_id == user.id, Outlet.university_id.is_(None))
+            .limit(1)
+        )
+    ).first()
+    if existing_personal is not None:
         return
 
-    # Seed outlets
-    outlet_objs: list[Outlet] = []
-    for seed in DEFAULT_OUTLETS:
-        outlet_objs.append(
-            Outlet(
+    affiliation_id = user.university_id
+    affiliation_has_outlets = await _affiliation_has_outlets(db, affiliation_id)
+    inherit_only = affiliation_id is not None and affiliation_has_outlets
+
+    if inherit_only:
+        # Case 2: joining an affiliation that already has shared definitions.
+        # Don't re-seed; build a default Search pointing at the shared pool.
+        en_lang = (
+            await db.execute(
+                select(UniversityLanguage).where(
+                    UniversityLanguage.university_id == affiliation_id,
+                    UniversityLanguage.iso_code == "en",
+                )
+            )
+        ).scalar_one_or_none() or await _affiliation_default_language(db, affiliation_id)
+
+        outlets = (
+            await db.execute(
+                select(Outlet).where(Outlet.university_id == affiliation_id)
+            )
+        ).scalars().all()
+    else:
+        # Case 1 (unaffiliated) and Case 3 (first user of a new affiliation):
+        # seed Languages and Outlets, owned by user, scoped to affiliation if any.
+        outlets = []
+        for seed in DEFAULT_OUTLETS:
+            o = Outlet(
                 user_id=user.id,
+                university_id=affiliation_id,
                 name=seed["name"],
                 domain=seed["domain"],
                 category=seed.get("category"),
                 keyword_langs=list(seed["keyword_langs"]),
                 is_active=True,
             )
+            db.add(o)
+            outlets.append(o)
+        await db.flush()
+
+        en_lang = UniversityLanguage(
+            user_id=user.id,
+            university_id=affiliation_id,
+            iso_code="en",
+            university_name="Kobe University",
         )
-    db.add_all(outlet_objs)
-    await db.flush()
+        db.add(en_lang)
+        await db.flush()
 
-    # Seed default English university language
-    en_lang = UniversityLanguage(
-        user_id=user.id,
-        iso_code="en",
-        university_name="Kobe University",
-    )
-    db.add(en_lang)
-    await db.flush()
-
-    # Build outlet IDs list
-    outlet_ids = [str(o.id) for o in outlet_objs]
-
-    # Create a default Search with the new config format
+    # Personal default Search is created in every case so the user has
+    # somewhere to start. The ID references point at whichever pool was used.
     config = dict(DEFAULT_SEARCH_CONFIG)
     config["university_name"] = {
         "enabled": True,
-        "language_ids": [str(en_lang.id)],
+        "language_ids": [str(en_lang.id)] if en_lang is not None else [],
+        "pages": 1,
     }
     config["outlets"] = {
         "enabled": True,
-        "outlet_ids": outlet_ids,
+        "outlet_ids": [str(o.id) for o in outlets],
     }
 
-    search = Search(
-        user_id=user.id,
-        name="Kobe University (default)",
-        is_default=True,
-        config=config,
+    db.add(
+        Search(
+            user_id=user.id,
+            name="Kobe University (default)",
+            is_default=True,
+            config=config,
+        )
     )
-    db.add(search)
 
 
 async def bootstrap_admin() -> None:

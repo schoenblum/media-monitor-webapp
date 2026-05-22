@@ -23,6 +23,13 @@ class RunOut(BaseModel):
     error_message: str | None
     search_name: str | None = None
     result_count: int = 0
+    # Affiliation context — only meaningful when the run was performed under
+    # a university (see revision_brief_v2.2.md §8.3 snapshot rule). The
+    # performer-email field is what the Run History "performed by" column
+    # surfaces to other members of the affiliation.
+    user_id: UUID | None = None
+    university_id: UUID | None = None
+    performed_by_email: str | None = None
 
 
 class ResultOut(BaseModel):

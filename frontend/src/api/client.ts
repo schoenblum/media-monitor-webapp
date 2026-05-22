@@ -1,4 +1,5 @@
 import type {
+  DuplicateRunsReport,
   ImportReport,
   LanguageCommitReport,
   LanguageCommitRequest,
@@ -12,6 +13,7 @@ import type {
   Run,
   Search,
   SearchConfig,
+  University,
   UniversityLanguage,
   User,
   UUID,
@@ -147,7 +149,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ email, role }),
     }),
-  updateUser: (id: UUID, payload: { is_active?: boolean; role?: "admin" | "user" }) =>
+  updateUser: (
+    id: UUID,
+    payload: {
+      is_active?: boolean;
+      role?: "admin" | "user";
+      set_university?: boolean;
+      university_id?: UUID | null;
+    },
+  ) =>
     request<User>(`/users/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteUser: (id: UUID) => request<void>(`/users/${id}`, { method: "DELETE" }),
   duplicateUser: (id: UUID, email: string) =>
@@ -265,6 +275,26 @@ export const api = {
     const params = run_ids.map((r) => `run_ids[]=${encodeURIComponent(r)}`).join("&");
     return fetchBlob(`/runs/export?${params}`);
   },
+
+  // Universities (admin only)
+  listUniversities: () => request<University[]>("/universities"),
+  createUniversity: (name: string) =>
+    request<University>("/universities", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+  renameUniversity: (id: UUID, name: string) =>
+    request<University>(`/universities/${id}`, {
+      method: "PUT",
+      body: JSON.stringify({ name }),
+    }),
+  deleteUniversity: (id: UUID) =>
+    request<void>(`/universities/${id}`, { method: "DELETE" }),
+  duplicateRunsIntoUniversity: (user_id: UUID, target_university_id: UUID) =>
+    request<DuplicateRunsReport>("/universities/duplicate-runs", {
+      method: "POST",
+      body: JSON.stringify({ user_id, target_university_id }),
+    }),
 };
 
 export type { Outlet, Result, Run, Search, UniversityLanguage, User, ResultsPage };

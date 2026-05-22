@@ -15,7 +15,16 @@ from fastapi.staticfiles import StaticFiles
 
 from app.bootstrap import bootstrap_admin
 from app.config import get_settings
-from app.routers import auth, languages, outlets, runs, searches, users, webhook
+from app.routers import (
+    auth,
+    languages,
+    outlets,
+    runs,
+    searches,
+    universities,
+    users,
+    webhook,
+)
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -34,7 +43,7 @@ async def lifespan(app: FastAPI):  # noqa: D401
 
 app = FastAPI(
     title="Media Monitor",
-    version="2.2.0",
+    version="2.3.0",
     lifespan=lifespan,
     # Auto-generated OpenAPI docs are disabled so the app's internal structure
     # is not exposed to the public. Developers can still introspect via the
@@ -57,6 +66,7 @@ app.include_router(outlets.router, prefix="/api/v1")
 app.include_router(runs.router, prefix="/api/v1")
 app.include_router(webhook.router, prefix="/api/v1")
 app.include_router(languages.router, prefix="/api/v1")
+app.include_router(universities.router, prefix="/api/v1")
 
 
 # Mount the SPA build (if present). All non-API GETs that don't match a file fall

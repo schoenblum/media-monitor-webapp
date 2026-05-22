@@ -1,4 +1,10 @@
-"""University language definitions — CRUD + CSV bulk import / export per tenant."""
+"""University language definitions — affiliation-aware CRUD + CSV import / export.
+
+When the current user is affiliated, languages are *shared* across the
+university (any member can view or edit, last-write-wins). When unaffiliated,
+behaviour is exactly as in v2.1: rows are private to ``user_id`` and carry
+``university_id == NULL``. See ``app/services/scoping.py``.
+"""
 import csv
 import io
 from uuid import UUID
@@ -25,6 +31,11 @@ from app.schemas.language import (
     LanguageUpdate,
 )
 from app.services.languages import is_supported
+from app.services.scoping import (
+    can_modify_shared_row,
+    shared_read_filter,
+    shared_write_owner,
+)
 
 
 router = APIRouter(prefix="/languages", tags=["languages"])
@@ -36,6 +47,20 @@ def _to_out(lang: UniversityLanguage) -> LanguageOut:
     return LanguageOut.model_validate(lang)
 
 
+async def _existing_by_iso(
+    db: AsyncSession, current: User
+) -> dict[str, UniversityLanguage]:
+    """Return the user's visible language rows keyed by lowercased iso_code."""
+    rows = (
+        await db.execute(
+            select(UniversityLanguage).where(
+                shared_read_filter(UniversityLanguage, current)
+            )
+        )
+    ).scalars().all()
+    return {r.iso_code: r for r in rows}
+
+
 @router.get("", response_model=list[LanguageOut])
 async def list_languages(
     current: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
@@ -43,7 +68,7 @@ async def list_languages(
     rows = (
         await db.execute(
             select(UniversityLanguage)
-            .where(UniversityLanguage.user_id == current.id)
+            .where(shared_read_filter(UniversityLanguage, current))
             .order_by(UniversityLanguage.iso_code.asc())
         )
     ).scalars().all()
@@ -56,21 +81,15 @@ async def create_language(
     current: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LanguageOut:
-    existing = (
-        await db.execute(
-            select(UniversityLanguage).where(
-                UniversityLanguage.user_id == current.id,
-                UniversityLanguage.iso_code == payload.iso_code,
-            )
-        )
-    ).scalar_one_or_none()
-    if existing is not None:
+    existing = await _existing_by_iso(db, current)
+    if payload.iso_code in existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"You already have an entry for ISO code '{payload.iso_code}'.",
         )
     new = UniversityLanguage(
         user_id=current.id,
+        university_id=shared_write_owner(current),
         iso_code=payload.iso_code,
         university_name=payload.university_name,
     )
@@ -88,18 +107,12 @@ async def update_language(
     db: AsyncSession = Depends(get_db),
 ) -> LanguageOut:
     row = await db.get(UniversityLanguage, lang_id)
-    if row is None or row.user_id != current.id:
+    if row is None or not can_modify_shared_row(row, current):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Language not found")
     data = payload.model_dump(exclude_unset=True)
     if "iso_code" in data and data["iso_code"] != row.iso_code:
-        clash = (
-            await db.execute(
-                select(UniversityLanguage).where(
-                    UniversityLanguage.user_id == current.id,
-                    UniversityLanguage.iso_code == data["iso_code"],
-                )
-            )
-        ).scalar_one_or_none()
+        existing = await _existing_by_iso(db, current)
+        clash = existing.get(data["iso_code"])
         if clash is not None and clash.id != row.id:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -133,7 +146,7 @@ async def bulk_delete_languages(
         await db.execute(
             select(UniversityLanguage).where(
                 UniversityLanguage.id.in_(ids),
-                UniversityLanguage.user_id == current.id,
+                shared_read_filter(UniversityLanguage, current),
             )
         )
     ).scalars().all()
@@ -149,7 +162,7 @@ async def delete_language(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     row = await db.get(UniversityLanguage, lang_id)
-    if row is None or row.user_id != current.id:
+    if row is None or not can_modify_shared_row(row, current):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Language not found")
     await db.delete(row)
     await db.commit()
@@ -187,7 +200,7 @@ async def export_languages(
     rows = (
         await db.execute(
             select(UniversityLanguage)
-            .where(UniversityLanguage.user_id == current.id)
+            .where(shared_read_filter(UniversityLanguage, current))
             .order_by(UniversityLanguage.iso_code.asc())
         )
     ).scalars().all()
@@ -251,14 +264,7 @@ async def preview_language_import(
     body = await file.read()
     rows, parse_errors = _parse_csv(body)
 
-    existing_by_iso = {
-        r.iso_code: r
-        for r in (
-            await db.execute(
-                select(UniversityLanguage).where(UniversityLanguage.user_id == current.id)
-            )
-        ).scalars().all()
-    }
+    existing_by_iso = await _existing_by_iso(db, current)
 
     new_rows: list[LanguagePreviewRow] = []
     invalid_iso_rows: list[LanguageInvalidIsoRow] = []
@@ -306,10 +312,14 @@ async def commit_language_import(
     current: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> LanguageCommitReport:
+    uni_id = shared_write_owner(current)
+
     if payload.mode == "replace":
         existing = (
             await db.execute(
-                select(UniversityLanguage).where(UniversityLanguage.user_id == current.id)
+                select(UniversityLanguage).where(
+                    shared_read_filter(UniversityLanguage, current)
+                )
             )
         ).scalars().all()
         deleted = len(existing)
@@ -326,6 +336,7 @@ async def commit_language_import(
             db.add(
                 UniversityLanguage(
                     user_id=current.id,
+                    university_id=uni_id,
                     iso_code=item.iso_code,
                     university_name=item.university_name,
                 )
@@ -335,30 +346,23 @@ async def commit_language_import(
         return LanguageCommitReport(added=added, replaced=0, deleted=deleted)
 
     # ADD mode — items with replace_existing_id update that row; others insert new
-    by_iso = {
-        r.iso_code: r
-        for r in (
-            await db.execute(
-                select(UniversityLanguage).where(UniversityLanguage.user_id == current.id)
-            )
-        ).scalars().all()
-    }
+    by_iso = await _existing_by_iso(db, current)
     added = 0
     replaced = 0
     for item in payload.items:
         if item.replace_existing_id is not None:
             row = await db.get(UniversityLanguage, item.replace_existing_id)
-            if row is None or row.user_id != current.id:
+            if row is None or not can_modify_shared_row(row, current):
                 continue
             row.iso_code = item.iso_code
             row.university_name = item.university_name
             replaced += 1
             continue
         if item.iso_code in by_iso:
-            # Item targeted as "new" but a row already has that ISO — skip to avoid duplicate.
             continue
         new_row = UniversityLanguage(
             user_id=current.id,
+            university_id=uni_id,
             iso_code=item.iso_code,
             university_name=item.university_name,
         )

@@ -34,6 +34,16 @@ class User(Base):
     )
     last_login: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     force_password_change: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Nullable: null == unaffiliated (single-tenant-per-user behaviour, default).
+    # Set: user is a member of this University and shares Languages, Outlets,
+    # and run history with other members. Credentials and webhook keys stay
+    # per-user regardless.
+    university_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("universities.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     searches = relationship("Search", back_populates="user", cascade="all, delete-orphan")
     outlets = relationship("Outlet", back_populates="user", cascade="all, delete-orphan")

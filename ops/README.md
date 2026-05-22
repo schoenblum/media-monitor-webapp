@@ -5,10 +5,12 @@ helpers that operators install on the production host.
 
 ## Automated PostgreSQL backups
 
-1. As root on the production host, create the secrets dir and copy the env file:
+1. As root on the production host, create the secrets dir, the dump
+   destination, and copy the env file:
 
    ```bash
-   sudo install -d -o root -g root -m 0755 /etc/media-monitor
+   sudo install -d -o deploy -g deploy -m 0750 /var/backups/media_monitor
+   sudo install -d -o root   -g root   -m 0755 /etc/media-monitor
    sudo install -o deploy -g deploy -m 0600 \
        ops/media-monitor-backup.env.example /etc/media-monitor/backup.env
    sudo $EDITOR /etc/media-monitor/backup.env   # set PGPASSWORD=<real value>
@@ -16,6 +18,8 @@ helpers that operators install on the production host.
 
    The real password matches `media_monitor_user` in PostgreSQL (the same value
    in `DATABASE_URL` in `/home/deploy/apps/media-monitor-webapp/.env`).
+   `/var/backups/media_monitor` must be writable by the `deploy` user since
+   the service unit runs as `User=deploy`.
 
 2. Install the unit + timer:
 

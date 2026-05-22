@@ -8,12 +8,13 @@ Type=oneshot
 User=deploy
 Group=deploy
 # Read PGPASSWORD from a root-readable env-file that only deploy can read.
-# Install:
-#   sudo install -o deploy -g deploy -m 0600 ops/media-monitor-backup.env.example \
-#        /etc/media-monitor/backup.env
+# Setup (see ops/README.md for the full sequence):
+#   sudo install -d -o deploy -g deploy -m 0750 /var/backups/media_monitor
+#   sudo install -d -o root -g root -m 0755 /etc/media-monitor
+#   sudo install -o deploy -g deploy -m 0600 \
+#        ops/media-monitor-backup.env.example /etc/media-monitor/backup.env
 #   sudo $EDITOR /etc/media-monitor/backup.env   # set PGPASSWORD=…
 EnvironmentFile=/etc/media-monitor/backup.env
-ExecStartPre=/bin/mkdir -p /var/backups/media_monitor
 ExecStart=/usr/bin/bash -c '\
     /usr/bin/pg_dump -h localhost -U media_monitor_user -d media_monitor -Fc \
         > /var/backups/media_monitor/media_monitor_$(date -u +%%Y%%m%%d).dump.tmp && \

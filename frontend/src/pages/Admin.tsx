@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { User } from "../api/types";
+import type { University, User, UUID } from "../api/types";
 import { Spinner } from "../components/Spinner";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useAuth } from "../auth";
@@ -10,6 +10,7 @@ type CreatedInfo = { email: string; password: string; email_sent: boolean };
 export default function Admin() {
   const { user: currentUser } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
+  const [universities, setUniversities] = useState<University[]>([]);
   const [loading, setLoading] = useState(true);
   const [newEmail, setNewEmail] = useState("");
   const [newRole, setNewRole] = useState<"admin" | "user">("user");
@@ -19,6 +20,18 @@ export default function Admin() {
   const [dupEmail, setDupEmail] = useState("");
   const [dupLoading, setDupLoading] = useState(false);
 
+  // University CRUD state
+  const [newUniName, setNewUniName] = useState("");
+  const [renameUni, setRenameUni] = useState<University | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [deletingUni, setDeletingUni] = useState<University | null>(null);
+
+  // Assign-to-university dialog state
+  const [assigning, setAssigning] = useState<User | null>(null);
+  const [assignChoice, setAssignChoice] = useState<UUID | "">("");
+  const [assignDupRuns, setAssignDupRuns] = useState(false);
+  const [assignLoading, setAssignLoading] = useState(false);
+
   useEffect(() => {
     refresh();
   }, []);
@@ -26,7 +39,9 @@ export default function Admin() {
   async function refresh() {
     setLoading(true);
     try {
-      setUsers(await api.listUsers());
+      const [u, unis] = await Promise.all([api.listUsers(), api.listUniversities()]);
+      setUsers(u);
+      setUniversities(unis);
     } finally {
       setLoading(false);
     }
@@ -87,6 +102,68 @@ export default function Admin() {
     }
   }
 
+  // --- University CRUD ---
+
+  async function createUniversity() {
+    if (!newUniName.trim()) return;
+    try {
+      await api.createUniversity(newUniName.trim());
+      setNewUniName("");
+      await refresh();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Create failed");
+    }
+  }
+
+  async function commitRename() {
+    if (!renameUni || !renameDraft.trim()) return;
+    try {
+      await api.renameUniversity(renameUni.id, renameDraft.trim());
+      setRenameUni(null);
+      setRenameDraft("");
+      await refresh();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Rename failed");
+    }
+  }
+
+  // --- Assign user to university ---
+
+  function startAssign(u: User) {
+    setAssigning(u);
+    setAssignChoice(u.university_id ?? "");
+    setAssignDupRuns(false);
+  }
+
+  async function commitAssign() {
+    if (!assigning) return;
+    setAssignLoading(true);
+    try {
+      const target = assignChoice === "" ? null : (assignChoice as UUID);
+      await api.updateUser(assigning.id, {
+        set_university: true,
+        university_id: target,
+      });
+      // Optional history-duplication step (§8.3) — copies the user's
+      // personal runs into the new university's pool. The originals stay
+      // where they were (snapshot rule).
+      if (assignDupRuns && target) {
+        const rep = await api.duplicateRunsIntoUniversity(assigning.id, target);
+        alert(
+          `Duplicated ${rep.runs_copied} runs (${rep.results_copied} results) into the target university.`,
+        );
+      }
+      setAssigning(null);
+      setAssignChoice("");
+      setAssignDupRuns(false);
+      await refresh();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Assignment failed");
+    } finally {
+      setAssignLoading(false);
+    }
+  }
+
   if (loading) return <Spinner className="h-6 w-6 text-brand" />;
 
   return (
@@ -129,6 +206,7 @@ export default function Admin() {
                 <th className="py-2">Email</th>
                 <th className="py-2">Role</th>
                 <th className="py-2">Status</th>
+                <th className="py-2">University</th>
                 <th className="py-2">Credentials</th>
                 <th className="py-2">Last login</th>
                 <th className="py-2 text-right">Actions</th>
@@ -160,6 +238,13 @@ export default function Admin() {
                       {u.is_active ? "active" : "disabled"}
                     </button>
                   </td>
+                  <td className="py-1.5 text-xs">
+                    {u.university_name ? (
+                      <span className="pill-blue">{u.university_name}</span>
+                    ) : (
+                      <span className="text-slate-400">— unaffiliated —</span>
+                    )}
+                  </td>
                   <td className="py-1.5 text-xs text-slate-600">
                     {u.has_google_key && u.has_engine_id ? "Google ✓" : "—"}
                     {u.has_webhook_key ? " · Webhook ✓" : ""}
@@ -170,12 +255,84 @@ export default function Admin() {
                   <td className="py-1.5 text-right">
                     <button
                       className="btn-ghost mr-1"
+                      onClick={() => startAssign(u)}
+                      title="Assign / move / unaffiliate"
+                    >
+                      Affiliation
+                    </button>
+                    <button
+                      className="btn-ghost mr-1"
                       onClick={() => startDuplicate(u)}
                       title="Duplicate user — copies searches, outlets, languages, and run history"
                     >
                       Duplicate
                     </button>
                     <button className="btn-ghost text-red-600" onClick={() => setDeleting(u)}>
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Universities CRUD */}
+      <div className="card p-4">
+        <h2 className="text-base font-semibold">Universities</h2>
+        <p className="mt-1 text-xs text-slate-500">
+          Members of a university <strong>share</strong> their Languages and Outlets and see each
+          other's run history. Login and Google API credentials always stay per-user.
+        </p>
+        <div className="mt-3 flex gap-2">
+          <input
+            className="input max-w-md"
+            placeholder="New university name…"
+            value={newUniName}
+            onChange={(e) => setNewUniName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") createUniversity(); }}
+          />
+          <button className="btn-primary" onClick={createUniversity} disabled={!newUniName.trim()}>
+            Add
+          </button>
+        </div>
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-left text-xs uppercase text-slate-500">
+              <tr>
+                <th className="py-2">Name</th>
+                <th className="py-2 text-right">Members</th>
+                <th className="py-2">Created</th>
+                <th className="py-2 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {universities.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="py-6 text-center text-slate-500">
+                    No universities yet.
+                  </td>
+                </tr>
+              )}
+              {universities.map((uni) => (
+                <tr key={uni.id} className="border-t border-slate-100">
+                  <td className="py-1.5 font-medium">{uni.name}</td>
+                  <td className="py-1.5 text-right tabular-nums">{uni.member_count}</td>
+                  <td className="py-1.5 text-xs text-slate-600">
+                    {new Date(uni.created_at).toLocaleDateString()}
+                  </td>
+                  <td className="py-1.5 text-right">
+                    <button
+                      className="btn-ghost mr-1"
+                      onClick={() => { setRenameUni(uni); setRenameDraft(uni.name); }}
+                    >
+                      Rename
+                    </button>
+                    <button
+                      className="btn-ghost text-red-600"
+                      onClick={() => setDeletingUni(uni)}
+                    >
                       Delete
                     </button>
                   </td>
@@ -226,6 +383,91 @@ export default function Admin() {
         </div>
       )}
 
+      {/* Affiliation assign / move / unaffiliate */}
+      {assigning && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="card w-full max-w-md p-5">
+            <h2 className="text-lg font-semibold">Affiliation for {assigning.email}</h2>
+            <p className="mt-2 text-sm text-slate-600">
+              Pick a university to add this user to a shared pool of Languages, Outlets, and run
+              history. Choose <em>— unaffiliated —</em> to return them to single-tenant mode.
+            </p>
+            <select
+              className="input mt-3 w-full"
+              value={assignChoice}
+              onChange={(e) => setAssignChoice(e.target.value as UUID | "")}
+            >
+              <option value="">— unaffiliated —</option>
+              {universities.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name} ({u.member_count} member{u.member_count === 1 ? "" : "s"})
+                </option>
+              ))}
+            </select>
+            {assignChoice && assignChoice !== assigning.university_id && (
+              <label className="mt-3 flex items-start gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={assignDupRuns}
+                  onChange={(e) => setAssignDupRuns(e.target.checked)}
+                />
+                <span>
+                  Also <strong>duplicate this user's personal run history</strong> into the new
+                  university's pool. Originals stay where they were (snapshot rule).
+                </span>
+              </label>
+            )}
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                className="btn-secondary"
+                onClick={() => { setAssigning(null); setAssignChoice(""); setAssignDupRuns(false); }}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn-primary"
+                disabled={assignLoading}
+                onClick={commitAssign}
+              >
+                {assignLoading && <Spinner />} Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rename university */}
+      {renameUni && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="card w-full max-w-md p-5">
+            <h2 className="text-lg font-semibold">Rename university</h2>
+            <input
+              className="input mt-3 w-full"
+              value={renameDraft}
+              onChange={(e) => setRenameDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") commitRename(); }}
+              autoFocus
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                className="btn-secondary"
+                onClick={() => { setRenameUni(null); setRenameDraft(""); }}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn-primary"
+                disabled={!renameDraft.trim() || renameDraft.trim() === renameUni.name}
+                onClick={commitRename}
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <ConfirmDialog
         open={!!deleting}
         title={`Delete ${deleting?.email}?`}
@@ -236,6 +478,26 @@ export default function Admin() {
         onConfirm={async () => {
           if (deleting) await api.deleteUser(deleting.id);
           setDeleting(null);
+          await refresh();
+        }}
+      />
+
+      <ConfirmDialog
+        open={!!deletingUni}
+        title={`Delete ${deletingUni?.name}?`}
+        body={
+          <span>
+            The university will be removed and all of its <strong>{deletingUni?.member_count ?? 0}</strong>{" "}
+            members will become unaffiliated. Their shared Languages, Outlets, and runs revert to
+            personal ownership (the rows are not deleted).
+          </span>
+        }
+        confirmLabel="Delete"
+        danger
+        onCancel={() => setDeletingUni(null)}
+        onConfirm={async () => {
+          if (deletingUni) await api.deleteUniversity(deletingUni.id);
+          setDeletingUni(null);
           await refresh();
         }}
       />

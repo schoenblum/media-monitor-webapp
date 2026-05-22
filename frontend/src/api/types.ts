@@ -174,6 +174,26 @@ export interface User {
   has_google_key: boolean;
   has_engine_id: boolean;
   has_webhook_key: boolean;
+  // Affiliation (Item 8). Null when unaffiliated.
+  university_id: UUID | null;
+  university_name: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// University (Item 8)
+// ---------------------------------------------------------------------------
+
+export interface University {
+  id: UUID;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  member_count: number;
+}
+
+export interface DuplicateRunsReport {
+  runs_copied: number;
+  results_copied: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -218,6 +238,11 @@ export interface Run {
   error_message: string | null;
   search_name: string | null;
   result_count: number;
+  // Affiliation context (Item 8) — meaningful when the run was performed under
+  // a university. ``performed_by_email`` powers the "performed by" column.
+  user_id: UUID | null;
+  university_id: UUID | null;
+  performed_by_email: string | null;
 }
 
 export interface Result {
