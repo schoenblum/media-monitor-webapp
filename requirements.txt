@@ -22,3 +22,10 @@ aiosmtplib==3.0.1
 # where the OS may not provide /usr/share/zoneinfo.
 APScheduler==3.10.4
 tzdata==2024.2
+# APScheduler's SQLAlchemyJobStore uses a *sync* SQLAlchemy engine, so the
+# async asyncpg driver the rest of the app uses won't work for the jobstore.
+# psycopg2-binary ships a precompiled wheel so the deploy box doesn't need
+# libpq + a compiler to build it. (psycopg2 is the historical default name
+# the SQLAlchemy "postgresql://..." URL resolves to; using the binary
+# distribution is the standard production pattern.)
+psycopg2-binary==2.9.10
