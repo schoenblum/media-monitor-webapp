@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, downloadBlob } from "../api/client";
 import type { Result, Run, Search, UUID } from "../api/types";
+import { triggerLabel } from "../api/types";
 import { RunStatusPill } from "../components/RunStatusPill";
 import { Spinner } from "../components/Spinner";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -145,6 +146,7 @@ export default function RunHistory() {
           <option value="running">Running</option>
           <option value="complete">Complete</option>
           <option value="failed">Failed</option>
+          <option value="skipped">Skipped</option>
         </select>
         <label
           className="flex items-center gap-2 text-xs text-slate-600"
@@ -240,10 +242,17 @@ export default function RunHistory() {
                   </td>
                 )}
                 <td className="py-1.5 text-slate-600 cursor-pointer" onClick={() => nav(`/runs/${r.id}`)}>
-                  {r.triggered_by}
+                  {triggerLabel(r.triggered_by)}
                 </td>
                 <td className="py-1.5 cursor-pointer" onClick={() => nav(`/runs/${r.id}`)}>
                   <RunStatusPill status={r.status} />
+                  {(r.status === "failed" || r.status === "skipped") && r.error_message && (
+                    <div className={`mt-0.5 text-[0.7rem] ${
+                      r.status === "failed" ? "text-red-700" : "text-amber-700"
+                    }`}>
+                      {r.error_message}
+                    </div>
+                  )}
                 </td>
                 <td className="py-1.5 text-right tabular-nums cursor-pointer" onClick={() => nav(`/runs/${r.id}`)}>
                   {r.result_count}

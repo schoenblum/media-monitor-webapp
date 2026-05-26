@@ -4,6 +4,18 @@ export type UserRole = "admin" | "user";
 export type RunStatus = "pending" | "running" | "complete" | "failed" | "skipped";
 export type RunTrigger = "manual" | "webhook" | "scheduled";
 
+/** Display-name map for the RunTrigger enum — keep this the single source of
+ * truth so Dashboard and Run History stay in agreement (v2.4 item 6). */
+export const RUN_TRIGGER_LABEL: Record<RunTrigger, string> = {
+  manual: "Manual",
+  webhook: "Webhook",
+  scheduled: "Scheduled",
+};
+
+export function triggerLabel(t: string): string {
+  return (RUN_TRIGGER_LABEL as Record<string, string>)[t] ?? t;
+}
+
 // ---------------------------------------------------------------------------
 // University language
 // ---------------------------------------------------------------------------

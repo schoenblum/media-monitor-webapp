@@ -167,6 +167,19 @@ search will surface news sites you never added).
 
 ---
 
+## 4b. Run status and trigger
+
+The Run History table shows the **Trigger** that started each run — one of
+**Manual** (the *Run* buttons), **Webhook** (an external POST to your API
+key), or **Scheduled** (the in-app scheduler from §6a). The Status column
+is *attention-only*: rows that ran cleanly are blank, **Failed** runs show
+a red badge with the error inline, and **Skipped** runs (a scheduled fire
+that couldn't proceed) show a calm amber badge with the reason. In-flight
+runs render as a transient *Queued…* / *Running…* indicator. Use the
+**Status** filter dropdown to narrow the list (now including *Skipped*).
+
+---
+
 ## 5. Run history — bulk actions
 
 In **Run History**, tick rows to select them. A toolbar appears offering:

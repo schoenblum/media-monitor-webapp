@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, downloadBlob } from "../api/client";
 import type { Result, Run } from "../api/types";
+import { triggerLabel } from "../api/types";
 import { RunStatusPill } from "../components/RunStatusPill";
 import { Spinner } from "../components/Spinner";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -104,18 +105,18 @@ export default function RunDetail() {
           <h2 className="flex-1 text-base font-semibold">{run.search_name}</h2>
           <RunStatusPill status={run.status} />
           {(run.status === "complete" || run.status === "failed") && (
-            <>
-              <button className="btn-primary" onClick={() => setExportOpen(true)}>
-                Export CSV
-              </button>
-              <button className="btn-danger" onClick={() => setConfirmDelete(true)}>
-                Delete run
-              </button>
-            </>
+            <button className="btn-primary" onClick={() => setExportOpen(true)}>
+              Export CSV
+            </button>
+          )}
+          {(run.status === "complete" || run.status === "failed" || run.status === "skipped") && (
+            <button className="btn-danger" onClick={() => setConfirmDelete(true)}>
+              Delete run
+            </button>
           )}
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-600 sm:grid-cols-5">
-          <Field label="Triggered by" value={run.triggered_by} />
+          <Field label="Triggered by" value={triggerLabel(run.triggered_by)} />
           <Field label="Started" value={new Date(run.started_at).toLocaleString()} />
           <Field
             label="Completed"
@@ -125,7 +126,13 @@ export default function RunDetail() {
           <Field label="Hits" value={String(total)} />
         </div>
         {run.error_message && (
-          <div className="mt-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">
+          <div
+            className={`mt-2 rounded px-3 py-2 text-xs ${
+              run.status === "skipped"
+                ? "bg-amber-50 text-amber-800"
+                : "bg-red-50 text-red-700"
+            }`}
+          >
             {run.error_message}
           </div>
         )}
