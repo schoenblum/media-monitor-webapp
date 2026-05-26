@@ -15,11 +15,18 @@ class RunStatus(str, enum.Enum):
     running = "running"
     complete = "complete"
     failed = "failed"
+    # v2.4 item 5/7 — a scheduled fire that could not proceed (no Google
+    # credentials, empty config, quota exhausted). Distinct from `failed` so
+    # the UI can render it calmly rather than as an error.
+    skipped = "skipped"
 
 
 class RunTrigger(str, enum.Enum):
     manual = "manual"
     webhook = "webhook"
+    # v2.4 item 7 — created by the in-process APScheduler from a search whose
+    # config.schedule.mode == "auto".
+    scheduled = "scheduled"
 
 
 class Run(Base):
