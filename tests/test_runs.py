@@ -1,6 +1,7 @@
 """Tests for the run lifecycle — date extractor, run trigger guard, CSV export."""
 import csv
 import io
+from pathlib import Path
 
 import pytest
 
@@ -36,6 +37,22 @@ async def test_trigger_run_requires_credentials(client):
     )
     assert r.status_code == 400
     assert "credentials" in r.json()["detail"].lower()
+
+
+def test_search_engine_never_writes_legacy_web_outlet_name():
+    """Guard for the v2.4 item 2 invariant.
+
+    Pre-v2.2, bare (no site:) searches stored ``outlet_name = "Web"`` on each
+    Result row. v2.2 switched the sentinel to ``""`` and v2.4 migration 0007
+    backfilled the historical rows. This test documents that the engine source
+    no longer mentions the legacy literal anywhere, so the dataset stays
+    consistent without a second renaming round.
+    """
+    src = Path("app/services/search_engine.py").read_text(encoding="utf-8")
+    assert '"Web"' not in src and "'Web'" not in src, (
+        "search_engine.py must not write the legacy 'Web' outlet_name sentinel — "
+        "use '' (empty string) instead and let the UI derive the host from the URL."
+    )
 
 
 @pytest.mark.asyncio
