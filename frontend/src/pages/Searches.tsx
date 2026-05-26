@@ -705,6 +705,12 @@ const TIMEZONE_PRESETS = [
   "Australia/Sydney",
 ];
 
+type PresetChoice = "6h" | "daily" | "weekly" | "custom";
+
+function presetForInterval(h: number): PresetChoice {
+  return h === 6 ? "6h" : h === 24 ? "daily" : h === 168 ? "weekly" : "custom";
+}
+
 function ScheduleEditor({
   schedule,
   searchWindow,
@@ -715,9 +721,35 @@ function ScheduleEditor({
   onChange: (s: ScheduleConfig) => void;
 }) {
   const isAuto = schedule.mode === "auto";
-  const presetForInterval = (h: number) =>
-    h === 6 ? "6h" : h === 24 ? "daily" : h === 168 ? "weekly" : "custom";
-  const currentPreset = presetForInterval(schedule.interval_hours);
+
+  // Track the dropdown choice locally so the user can pick "Custom" even when
+  // interval_hours happens to equal a preset value (e.g. 24). Without this,
+  // currentPreset would always be re-derived from interval_hours and the
+  // select would snap back to the preset on the next render.
+  const [presetChoice, setPresetChoice] = useState<PresetChoice>(() =>
+    presetForInterval(schedule.interval_hours),
+  );
+
+  // If the *config* changes externally to a clear preset value (e.g. a new
+  // search loaded), follow the config. But never override a user who has
+  // explicitly chosen "Custom", even if their N happens to match a preset.
+  useEffect(() => {
+    const derived = presetForInterval(schedule.interval_hours);
+    if (presetChoice !== "custom" || derived === "custom") {
+      setPresetChoice(derived);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [schedule.interval_hours]);
+
+  function pickPreset(v: PresetChoice) {
+    setPresetChoice(v);
+    if (v === "6h") onChange({ ...schedule, interval_hours: 6 });
+    else if (v === "daily") onChange({ ...schedule, interval_hours: 24 });
+    else if (v === "weekly") onChange({ ...schedule, interval_hours: 168 });
+    // "custom" leaves interval_hours where it is so the user can edit the
+    // numeric field. The dropdown stays on "Custom" because presetChoice
+    // (local state) wins over the value derived from interval_hours.
+  }
 
   return (
     <div className="space-y-3 text-sm">
@@ -747,15 +779,8 @@ function ScheduleEditor({
               <span className="text-xs text-slate-500">Interval</span>
               <select
                 className="input"
-                value={currentPreset}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (v === "6h") onChange({ ...schedule, interval_hours: 6 });
-                  else if (v === "daily") onChange({ ...schedule, interval_hours: 24 });
-                  else if (v === "weekly") onChange({ ...schedule, interval_hours: 168 });
-                  // "custom" leaves interval_hours as-is so the user can edit
-                  // the numeric field below.
-                }}
+                value={presetChoice}
+                onChange={(e) => pickPreset(e.target.value as PresetChoice)}
               >
                 <option value="6h">Every 6 hours</option>
                 <option value="daily">Daily</option>
@@ -763,7 +788,7 @@ function ScheduleEditor({
                 <option value="custom">Custom — every N hours</option>
               </select>
             </label>
-            {currentPreset === "custom" && (
+            {presetChoice === "custom" && (
               <label className="flex flex-col gap-1">
                 <span className="text-xs text-slate-500">Every N hours</span>
                 <input
