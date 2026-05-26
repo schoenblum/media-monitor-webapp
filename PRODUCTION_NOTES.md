@@ -1,6 +1,6 @@
 # Media Monitor — Production Notes
 
-*Standing procedure for working on this repo. Last updated: 2026-05-22.*
+*Standing procedure for working on this repo. Last updated: 2026-05-26.*
 
 This file captures **how we work**. It is intentionally separate from
 `HANDOVER.md`, which owns architecture, secrets, and current status. Keep this
@@ -95,3 +95,37 @@ running system:
 - **Verify before assuming.** When the handover or a brief refers to existing
   behaviour, read the current code first — the handover is a guide, not ground
   truth.
+
+## 7. Docs are always Markdown
+
+Every documentation deliverable in this project — briefs, handover, production
+notes, READMEs, in-app Manual content — stays in Markdown (`.md`). Never
+produce Word / `.docx` versions of any of these, even when asked for a "doc":
+
+- Not every reader of the repo has Word; Markdown opens in any editor and
+  renders on GitHub directly.
+- `.md` diffs cleanly in `git diff`; `.docx` is a zip of XML and behaves as
+  an opaque binary in version control.
+- The in-app Manual is itself Markdown rendered by `react-markdown`, so keeping
+  the source format consistent end-to-end avoids round-trip conversions.
+
+If a user needs a Word-ready deliverable from a Markdown source, the right
+move is to convert at *export* time (`pandoc -o foo.docx foo.md` or similar)
+without committing the binary.
+
+## 8. Scheduler single-firing must be verified after every deploy (v2.4)
+
+The in-process APScheduler (added in v2.4 item 7 — see HANDOVER §8.10) runs
+inside both Uvicorn workers and is protected from double-firing by a per-fire
+Postgres advisory lock. Local single-worker `uvicorn` runs *cannot* exercise
+this guard — they look fine even when the lock is broken. After **any** deploy
+that touches the scheduler or its dependencies (APScheduler version, the
+advisory-lock helper, the database driver):
+
+1. Create a throwaway search with `schedule.mode == "auto"` and a short
+   interval (e.g. every 1 hour, start time in 2 minutes).
+2. Tail `journalctl -u media-monitor -f` for at least one full interval.
+3. Confirm **exactly one** `Run(triggered_by=scheduled)` row appears per
+   interval — not two. Two rows means the lock isn't engaging; investigate
+   before declaring the deploy good.
+4. Delete the throwaway search when done.
