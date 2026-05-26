@@ -164,18 +164,14 @@ export default function Dashboard() {
 function CredentialsBanner({ user }: { user: User | null }) {
   if (!user) return null;
   const ok = user.has_google_key && user.has_engine_id;
+  if (ok) return null;
   return (
-    <div
-      className={`flex items-center justify-between rounded-md border p-3 text-sm ${
-        ok ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-800"
-      }`}
-    >
+    <div className="flex items-center justify-between rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
       <span>
-        Google Custom Search credentials:{" "}
-        <strong>{ok ? "configured" : "not configured"}</strong>
+        Google Custom Search credentials: <strong>not configured</strong>
       </span>
       <Link to="/settings" className="font-medium underline">
-        {ok ? "Manage" : "Set up now"}
+        Set up now
       </Link>
     </div>
   );
