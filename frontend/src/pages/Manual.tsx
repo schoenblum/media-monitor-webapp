@@ -140,6 +140,18 @@ Excel.
 
 ---
 
+## 4a. Dashboard widgets
+
+The **Dashboard** shows a short feed of recent runs plus two summary widgets:
+**Top sources** (the most frequent hostnames across runs in the chosen window)
+and **Hits by detected language**. Both widgets cover the same time window — a
+small **Window (days)** input next to *Top sources* sets it (default 7 days).
+Source labels are derived from each result's URL, so they correctly attribute
+hits that come from outlets outside your library (e.g. a university-name
+search will surface news sites you never added).
+
+---
+
 ## 5. Run history — bulk actions
 
 In **Run History**, tick rows to select them. A toolbar appears offering:
