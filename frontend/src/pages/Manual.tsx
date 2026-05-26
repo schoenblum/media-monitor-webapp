@@ -133,7 +133,13 @@ You land on the **Run Detail** page; results appear as Google returns them.
 ### 4.1 Review and export
 Each hit shows the title, snippet, the **source host** (e.g. \`bbc.com\`, derived
 from the result URL with any \`www.\` prefix stripped), the detected language,
-and an extracted date. Tick the rows you want and click **Export CSV**.
+and a **Published** date — the article's publication date, parsed best-effort
+from the Google result snippet. The Published date can be approximate or
+missing depending on how the source page exposes it. Don't confuse it with
+the run's **Started** timestamp shown at the top of the Run Detail page and
+in the Run History "Started" column — that's when *you* ran the search.
+
+Tick the rows you want and click **Export CSV**.
 
 CSV format: \`Date, Media, Language, Headline, URL\` — UTF-8 with BOM, ready for
 Excel.

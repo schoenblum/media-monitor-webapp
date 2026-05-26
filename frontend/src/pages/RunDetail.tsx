@@ -206,7 +206,12 @@ export default function RunDetail() {
                           )}
                           <div className="mt-1 flex flex-wrap items-center gap-1.5">
                             {r.date_extracted && (
-                              <span className="pill-amber">{r.date_extracted}</span>
+                              <span
+                                className="pill-amber"
+                                title="Publication date parsed from the result snippet — may be approximate or missing."
+                              >
+                                Published {r.date_extracted}
+                              </span>
                             )}
                             {(() => {
                               const host = sourceHostFor(r.url);
