@@ -238,8 +238,14 @@ export const api = {
     const qs = q.toString();
     return request<Run[]>(`/runs${qs ? `?${qs}` : ""}`);
   },
-  triggerRun: (search_id: UUID) =>
-    request<Run>("/runs", { method: "POST", body: JSON.stringify({ search_id }) }),
+  triggerRun: (search_id: UUID, opts?: { deduplicate?: boolean }) =>
+    request<Run>("/runs", {
+      method: "POST",
+      body: JSON.stringify({
+        search_id,
+        deduplicate: opts?.deduplicate ?? true,
+      }),
+    }),
   getRun: (id: UUID) => request<Run>(`/runs/${id}`),
   getResults: (
     id: UUID,

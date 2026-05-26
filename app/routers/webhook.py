@@ -71,5 +71,8 @@ async def trigger_via_webhook(
     db.add(run)
     await db.commit()
     await db.refresh(run)
-    background.add_task(execute_run, run.id)
+    # Webhook trigger always dedupes — external callers can't reasonably reach
+    # in to override per-run, and a recurring webhook would otherwise re-surface
+    # the same hits every fire (item 4b).
+    background.add_task(execute_run, run.id, deduplicate=True)
     return WebhookRunResponse(run_id=run.id, status=run.status)

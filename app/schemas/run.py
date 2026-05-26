@@ -9,6 +9,12 @@ from app.models.run import RunStatus, RunTrigger
 
 class RunCreate(BaseModel):
     search_id: UUID
+    # When True (default) AND the search uses search_window="last", URLs
+    # already returned by previous completed runs of the same search within
+    # the engine's DEDUPE_WINDOW_DAYS are suppressed. See revision_brief_v2.4
+    # item 4b — this is a property of *this run*, deliberately not stored on
+    # Search.config so toggling it does not edit the saved search.
+    deduplicate: bool = True
 
 
 class RunOut(BaseModel):

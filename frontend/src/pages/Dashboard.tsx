@@ -67,6 +67,7 @@ export default function Dashboard() {
   const [hits, setHits] = useState<RunHits>({ bySource: {}, byLang: {}, truncated: false });
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState<string | null>(null);
+  const [deduplicate, setDeduplicate] = useState(true);
   const [windowDays, setWindowDays] = useState<number>(loadStoredWindowDays);
   const [windowInput, setWindowInput] = useState<string>(() => String(loadStoredWindowDays()));
   const [refreshingHits, setRefreshingHits] = useState(false);
@@ -130,7 +131,7 @@ export default function Dashboard() {
     if (!defaultSearch) return;
     setRunning(defaultSearch.id);
     try {
-      const r = await api.triggerRun(defaultSearch.id);
+      const r = await api.triggerRun(defaultSearch.id, { deduplicate });
       nav(`/runs/${r.id}`);
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to start run.");
@@ -179,6 +180,17 @@ export default function Dashboard() {
             {defaultSearch ? defaultSearch.name : "No default search configured"}
           </div>
         </div>
+        <label
+          className="flex items-center gap-2 text-xs text-slate-600"
+          title="Skip URLs returned by previous runs of this search within the last couple of days."
+        >
+          <input
+            type="checkbox"
+            checked={deduplicate}
+            onChange={(e) => setDeduplicate(e.target.checked)}
+          />
+          Deduplicate results
+        </label>
         <button
           disabled={!defaultSearch || running !== null}
           onClick={runDefault}

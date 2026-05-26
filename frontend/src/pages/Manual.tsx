@@ -130,6 +130,15 @@ A search can only be run if at least one of the following is true:
 From the **Dashboard**, the **Searches** page, or **Run History**, trigger a run.
 You land on the **Run Detail** page; results appear as Google returns them.
 
+Next to each Run button is a **Deduplicate results** checkbox, on by default.
+With it on, a *Last successful run* search will skip URLs that already
+appeared in previous runs of the same search within the last couple of days
+— so a run a few hours after the previous one won't re-list the same hits.
+Uncheck it to see everything in the window, including repeats. The checkbox
+only affects *Last successful run* mode; the *Previous hours* and *Date range*
+modes already let you choose the window deliberately and are never deduped
+across runs.
+
 ### 4.1 Review and export
 Each hit shows the title, snippet, the **source host** (e.g. \`bbc.com\`, derived
 from the result URL with any \`www.\` prefix stripped), the detected language,

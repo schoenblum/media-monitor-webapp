@@ -128,7 +128,7 @@ async def trigger_run(
     db.add(run)
     await db.commit()
     await db.refresh(run)
-    background.add_task(execute_run, run.id)
+    background.add_task(execute_run, run.id, deduplicate=payload.deduplicate)
     return await _run_to_out(
         db, run, search_name=search.name, performer_email=current.email
     )

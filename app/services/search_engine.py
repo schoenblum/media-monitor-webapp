@@ -51,6 +51,13 @@ GOOGLE_CSE_URL = "https://www.googleapis.com/customsearch/v1"
 API_CALL_DELAY_SECONDS = 0.5
 DEFAULT_LOOKBACK_HOURS = 72
 MAX_PAGES = 10
+# v2.4 item 4b — cross-run de-duplication for search_window="last" runs.
+# Anchored to the previous run's started_at: skip URLs that appear in any
+# prior completed run of the same search whose started_at is within this many
+# days of the most recent previous run. Not exposed in the UI by design
+# (dedupe is correctness, not preference); the per-run on/off lives on the
+# trigger payload via Schemas.RunCreate.deduplicate.
+DEDUPE_WINDOW_DAYS = 2
 
 
 class QuerySpec(NamedTuple):
@@ -295,13 +302,62 @@ async def _fetch_page(
 # ---------------------------------------------------------------------------
 
 
-async def execute_run(run_id: UUID) -> None:
+async def execute_run(run_id: UUID, deduplicate: bool = True) -> None:
     async with SessionLocal() as db:
         try:
-            await _execute_run_inner(run_id, db)
+            await _execute_run_inner(run_id, db, deduplicate=deduplicate)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Run %s crashed: %s", run_id, exc)
             await _mark_failed(db, run_id, f"Internal error: {exc}")
+
+
+async def _collect_recent_seen_urls(
+    db: AsyncSession, search_id: UUID, current_run_id: UUID
+) -> set[str]:
+    """Return URLs from prior completed runs of this search within the dedupe window.
+
+    The window is anchored to the *previous* run's started_at (not to "now"),
+    matching item 4b's intent: catch the day-granularity duplicates that the
+    Google CSE ``dateRestrict`` parameter inevitably re-surfaces, without
+    scanning unbounded history.
+    """
+    from datetime import timedelta
+
+    from app.models.run import RunStatus as RS
+
+    prev_started = (
+        await db.execute(
+            select(Run.started_at)
+            .where(Run.search_id == search_id)
+            .where(Run.id != current_run_id)
+            .where(Run.status == RS.complete)
+            .order_by(Run.started_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if prev_started is None:
+        return set()
+    if prev_started.tzinfo is None:
+        prev_started = prev_started.replace(tzinfo=timezone.utc)
+    window_start = prev_started - timedelta(days=DEDUPE_WINDOW_DAYS)
+
+    prior_run_ids = (
+        await db.execute(
+            select(Run.id)
+            .where(Run.search_id == search_id)
+            .where(Run.id != current_run_id)
+            .where(Run.status == RS.complete)
+            .where(Run.started_at >= window_start)
+        )
+    ).scalars().all()
+    if not prior_run_ids:
+        return set()
+    urls = (
+        await db.execute(
+            select(Result.url).where(Result.run_id.in_(prior_run_ids))
+        )
+    ).scalars().all()
+    return {u for u in urls if u}
 
 
 async def _mark_failed(db: AsyncSession, run_id: UUID, message: str) -> None:
@@ -314,7 +370,9 @@ async def _mark_failed(db: AsyncSession, run_id: UUID, message: str) -> None:
     await db.commit()
 
 
-async def _execute_run_inner(run_id: UUID, db: AsyncSession) -> None:
+async def _execute_run_inner(
+    run_id: UUID, db: AsyncSession, *, deduplicate: bool = True
+) -> None:
     run = await db.get(Run, run_id)
     if run is None:
         logger.warning("Run %s vanished before execution", run_id)
@@ -382,7 +440,13 @@ async def _execute_run_inner(run_id: UUID, db: AsyncSession) -> None:
         await db.commit()
         return
 
+    # Pre-seed seen_urls with URLs from prior completed runs in the dedupe
+    # window — only for "last" mode, only when the per-run flag is on.
+    # "hours" / "range" are explicit user-chosen windows and intentionally
+    # allow repeats.
     seen_urls: set[str] = set()
+    if deduplicate and config.get("search_window", "last") == "last":
+        seen_urls = await _collect_recent_seen_urls(db, search.id, run.id)
     api_calls_used = 0
     quota_hit = False
     last_error: str | None = None

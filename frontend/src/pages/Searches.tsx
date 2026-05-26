@@ -43,9 +43,9 @@ export default function Searches() {
     setNewName("");
   }
 
-  async function runNow(id: UUID) {
+  async function runNow(id: UUID, deduplicate: boolean) {
     try {
-      const r = await api.triggerRun(id);
+      const r = await api.triggerRun(id, { deduplicate });
       nav(`/runs/${r.id}`);
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to start run");
@@ -145,7 +145,7 @@ function SearchEditor({
   searchId: UUID;
   onChanged: () => void;
   onDelete: (s: Search) => void;
-  onRun: (id: UUID) => void;
+  onRun: (id: UUID, deduplicate: boolean) => void;
 }) {
   const [search, setSearch] = useState<Search | null>(null);
   const [name, setName] = useState("");
@@ -156,6 +156,7 @@ function SearchEditor({
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [deduplicate, setDeduplicate] = useState(true);
 
   useEffect(() => {
     (async () => {
@@ -231,12 +232,23 @@ function SearchEditor({
           />
           Default search
         </label>
-        <div className="ml-auto flex gap-2">
+        <div className="ml-auto flex flex-wrap items-center gap-3">
+          <label
+            className="flex items-center gap-2 text-xs text-slate-600"
+            title="Skip URLs returned by previous runs of this search within the last couple of days (applies to 'Last successful run' window only)."
+          >
+            <input
+              type="checkbox"
+              checked={deduplicate}
+              onChange={(e) => setDeduplicate(e.target.checked)}
+            />
+            Deduplicate results
+          </label>
           <button
             className="btn-primary"
             disabled={!isValid}
             title={isValid ? undefined : "Add at least one term, DOI, or university name language"}
-            onClick={() => onRun(search.id)}
+            onClick={() => onRun(search.id, deduplicate)}
           >
             Run now
           </button>

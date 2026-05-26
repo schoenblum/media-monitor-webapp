@@ -16,6 +16,7 @@ export default function RunHistory() {
   const [searchFilter, setSearchFilter] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [running, setRunning] = useState<string | null>(null);
+  const [deduplicate, setDeduplicate] = useState(true);
   const [selected, setSelected] = useState<Set<UUID>>(new Set());
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [mergeRunIds, setMergeRunIds] = useState<UUID[] | null>(null);
@@ -75,7 +76,7 @@ export default function RunHistory() {
     }
     setRunning(target.id);
     try {
-      const r = await api.triggerRun(target.id);
+      const r = await api.triggerRun(target.id, { deduplicate });
       nav(`/runs/${r.id}`);
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to start run");
@@ -145,6 +146,17 @@ export default function RunHistory() {
           <option value="complete">Complete</option>
           <option value="failed">Failed</option>
         </select>
+        <label
+          className="flex items-center gap-2 text-xs text-slate-600"
+          title="Skip URLs returned by previous runs of this search within the last couple of days."
+        >
+          <input
+            type="checkbox"
+            checked={deduplicate}
+            onChange={(e) => setDeduplicate(e.target.checked)}
+          />
+          Deduplicate
+        </label>
         <button className="btn-primary" disabled={!!running} onClick={runDefault}>
           {running && <Spinner />} Run default
         </button>
