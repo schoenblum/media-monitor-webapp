@@ -250,9 +250,15 @@ with the **Scheduled** trigger label in Run History. Combine them with
 which is the default for automatic runs) so each cycle returns only what's
 new since the last fire.
 
-**Date range** windows cannot be combined with automatic runs — the form
-warns and the API rejects this combination, because a fixed calendar range
-would return the same results on every fire.
+**Pairing with *Date range*** — when an automatic search uses *Date range*,
+the configured range is treated as a one-time **initial backfill**: the
+first scheduled run covers \`date_from\` through \`date_to\` (or today, if
+\`date_to\` is empty), and every subsequent scheduled run behaves like
+*Last successful run* — only what's new since the previous fire. This is
+useful when you want a recurring search to start from a known historical
+date the first time it runs, then stay tight to the previous run after that.
+Manual and webhook *Date range* runs still use the literal range every time,
+unchanged.
 
 **When a scheduled run can't proceed** (e.g. you removed your Google
 credentials, the search has no terms, or your Google quota is exhausted),

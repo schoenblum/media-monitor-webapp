@@ -656,24 +656,18 @@ function SearchEditor({
         </p>
       )}
       {config.schedule.mode === "auto" && config.search_window === "range" && (
-        <p className="text-sm text-red-700 bg-red-50 rounded-md px-3 py-2">
-          Automatic runs cannot use a fixed <strong>Date range</strong> window —
-          switch the Search window to <em>Last successful run</em> or{" "}
-          <em>Previous hours</em> before saving. The save will be rejected as long
-          as both are set.
+        <p className="text-sm text-sky-800 bg-sky-50 rounded-md px-3 py-2">
+          The configured <strong>Date range</strong> is the <em>initial
+          backfill</em> for this automatic search. The first scheduled run
+          covers that range; every subsequent run behaves like <em>Last
+          successful run</em> and only picks up what's new since the previous
+          fire.
         </p>
       )}
 
       {/* Footer actions */}
       <div className="flex items-center gap-3">
-        <button
-          className="btn-primary"
-          disabled={
-            saving ||
-            (config.schedule.mode === "auto" && config.search_window === "range")
-          }
-          onClick={save}
-        >
+        <button className="btn-primary" disabled={saving} onClick={save}>
           {saving && <Spinner />} Save changes
         </button>
         {savedAt && (
@@ -837,16 +831,12 @@ function ScheduleEditor({
             weekly intervals fire at <strong>{schedule.start_time}</strong> each
             day/week; sub-daily intervals fire at the next start-time-aligned
             slot, then every {schedule.interval_hours} hours from there.
-            Scheduled runs reuse the search's own <em>Search window</em> setting
-            — combine with <em>Last successful run</em> for "only what's new
-            each cycle".
+            Scheduled runs reuse the search's own <em>Search window</em>:
+            combine with <em>Last successful run</em> for "only what's new
+            each cycle", or with <em>Date range</em> to use that range as a
+            one-time initial backfill (subsequent runs then behave like
+            <em>Last successful run</em>).
           </p>
-          {searchWindow === "range" && (
-            <p className="text-xs text-red-700">
-              <strong>Date range</strong> windows cannot be combined with
-              automatic runs — pick a different Search window above.
-            </p>
-          )}
         </div>
       )}
     </div>

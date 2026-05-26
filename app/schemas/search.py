@@ -104,15 +104,12 @@ class SearchConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_range(self) -> "SearchConfig":
-        # Recurring schedules and fixed calendar windows are mutually exclusive:
-        # a "range" search has a hard-coded date_from/date_to and produces the
-        # same results on every fire, so firing it on a timer is nonsensical.
-        # Reject this combination at the schema layer so the API can't persist it.
-        if self.schedule.mode == "auto" and self.search_window == "range":
-            raise ValueError(
-                "Scheduled (auto) runs cannot use search_window='range' — switch "
-                "to 'last' or 'hours' before enabling automatic runs."
-            )
+        # auto + range is allowed and has special "initial backfill" semantics:
+        # the first scheduled run uses the date_from/date_to window as a
+        # one-time backfill, and every subsequent scheduled run behaves like
+        # search_window="last" (looks back to the most recent prior completed
+        # run). The engine resolves this in _resolve_effective_window — the
+        # schema only stores the user's intent.
         if self.search_window != "range":
             return self
         df = _parse_iso_date(self.date_from)

@@ -79,18 +79,21 @@ def test_invalid_timezone_rejected():
         ScheduleConfig(timezone="Not/AZone")
 
 
-def test_auto_plus_range_rejected_at_config_level():
-    from pydantic import ValidationError
-
+def test_auto_plus_range_accepted_at_config_level():
+    """v2.4.1 — auto + range is now allowed; the engine treats the range as
+    a one-time initial backfill on the first scheduled run and switches to
+    "last" semantics for subsequent runs (see _resolve_effective_window).
+    """
     from app.schemas.search import SearchConfig
 
-    with pytest.raises(ValidationError):
-        SearchConfig(
-            search_window="range",
-            date_from="2026-05-01",
-            date_to="2026-05-10",
-            schedule={"mode": "auto", "interval_hours": 24, "start_time": "08:00", "timezone": "Asia/Tokyo"},
-        )
+    cfg = SearchConfig(
+        search_window="range",
+        date_from="2026-05-01",
+        date_to="2026-05-10",
+        schedule={"mode": "auto", "interval_hours": 24, "start_time": "08:00", "timezone": "Asia/Tokyo"},
+    )
+    assert cfg.schedule.mode == "auto"
+    assert cfg.search_window == "range"
 
 
 def test_interval_hours_must_be_positive():
@@ -142,7 +145,8 @@ async def test_search_update_accepts_schedule_block(client):
 
 
 @pytest.mark.asyncio
-async def test_search_update_rejects_auto_plus_range(client):
+async def test_search_update_accepts_auto_plus_range(client):
+    """v2.4.1 — auto + range is allowed via the PUT endpoint."""
     h = await _login(client)
     r = await client.get("/api/v1/searches", headers=h)
     sid = r.json()[0]["id"]
@@ -167,7 +171,164 @@ async def test_search_update_rejects_auto_plus_range(client):
         },
     }
     upd = await client.put(f"/api/v1/searches/{sid}", json=body, headers=h)
-    assert upd.status_code == 422  # Pydantic validation rejects it
+    assert upd.status_code == 200, upd.text
+    persisted = upd.json()["config"]
+    assert persisted["search_window"] == "range"
+    assert persisted["schedule"]["mode"] == "auto"
+    assert persisted["date_from"] == "2026-05-01"
+
+
+# ---------------------------------------------------------------------------
+# Auto+range effective-window semantics (v2.4.1 feature change)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_auto_range_first_run_uses_range(client, session_factory):
+    """First scheduled fire of an auto+range search keeps the date range —
+    it's the initial backfill the user explicitly asked for.
+    """
+    from app.models.run import Run, RunStatus, RunTrigger
+    from app.models.user import User
+    from app.services.search_engine import _resolve_effective_window
+
+    h = await _login(client)
+    r = await client.get("/api/v1/searches", headers=h)
+    sid = UUID(r.json()[0]["id"])
+
+    config = {
+        "search_window": "range",
+        "date_from": "2026-05-01",
+        "date_to": "2026-05-10",
+        "schedule": {"mode": "auto", "interval_hours": 24, "start_time": "08:00", "timezone": "Asia/Tokyo"},
+    }
+
+    async with session_factory() as db:
+        admin = (
+            await db.execute(select(User).where(User.email == "admin@example.com"))
+        ).scalar_one()
+        # The current run is freshly inserted; no prior completed runs of this
+        # search exist → effective window stays "range".
+        current = Run(
+            id=uuid4(),
+            user_id=admin.id,
+            search_id=sid,
+            triggered_by=RunTrigger.scheduled,
+            status=RunStatus.running,
+        )
+        db.add(current)
+        await db.commit()
+        await db.refresh(current)
+        effective = await _resolve_effective_window(db, current, config)
+
+    assert effective["search_window"] == "range"
+    assert effective["date_from"] == "2026-05-01"
+
+
+@pytest.mark.asyncio
+async def test_auto_range_subsequent_run_flips_to_last(client, session_factory):
+    """Once a prior completed run of an auto+range search exists, the
+    effective window flips to "last" — only what's new since last fire.
+    """
+    from datetime import timedelta
+
+    from app.models.run import Run, RunStatus, RunTrigger
+    from app.models.user import User
+    from app.services.search_engine import _resolve_effective_window
+
+    h = await _login(client)
+    r = await client.get("/api/v1/searches", headers=h)
+    sid = UUID(r.json()[0]["id"])
+
+    config = {
+        "search_window": "range",
+        "date_from": "2026-05-01",
+        "date_to": "2026-05-10",
+        "schedule": {"mode": "auto", "interval_hours": 24, "start_time": "08:00", "timezone": "Asia/Tokyo"},
+    }
+
+    async with session_factory() as db:
+        admin = (
+            await db.execute(select(User).where(User.email == "admin@example.com"))
+        ).scalar_one()
+        now = datetime.now(timezone.utc)
+        prior = Run(
+            id=uuid4(),
+            user_id=admin.id,
+            search_id=sid,
+            triggered_by=RunTrigger.scheduled,
+            status=RunStatus.complete,
+            started_at=now - timedelta(hours=24),
+            completed_at=now - timedelta(hours=24),
+        )
+        current = Run(
+            id=uuid4(),
+            user_id=admin.id,
+            search_id=sid,
+            triggered_by=RunTrigger.scheduled,
+            status=RunStatus.running,
+        )
+        db.add_all([prior, current])
+        await db.commit()
+        await db.refresh(current)
+        effective = await _resolve_effective_window(db, current, config)
+
+    assert effective["search_window"] == "last"
+    # The literal range fields are preserved on the dict (we only override
+    # the window) so nothing else in the config drifts.
+    assert effective["date_from"] == "2026-05-01"
+
+
+@pytest.mark.asyncio
+async def test_manual_range_run_keeps_literal_range(client, session_factory):
+    """Manual / webhook range runs are NOT affected by the new override —
+    the user is explicitly asking for that exact window every time.
+    """
+    from datetime import timedelta
+
+    from app.models.run import Run, RunStatus, RunTrigger
+    from app.models.user import User
+    from app.services.search_engine import _resolve_effective_window
+
+    h = await _login(client)
+    r = await client.get("/api/v1/searches", headers=h)
+    sid = UUID(r.json()[0]["id"])
+
+    config = {
+        "search_window": "range",
+        "date_from": "2026-05-01",
+        "date_to": "2026-05-10",
+        "schedule": {"mode": "manual", "interval_hours": 24, "start_time": "08:00", "timezone": "Asia/Tokyo"},
+    }
+
+    async with session_factory() as db:
+        admin = (
+            await db.execute(select(User).where(User.email == "admin@example.com"))
+        ).scalar_one()
+        now = datetime.now(timezone.utc)
+        # Even with a prior completed run, a manual range run stays "range".
+        prior = Run(
+            id=uuid4(),
+            user_id=admin.id,
+            search_id=sid,
+            triggered_by=RunTrigger.manual,
+            status=RunStatus.complete,
+            started_at=now - timedelta(hours=24),
+            completed_at=now - timedelta(hours=24),
+        )
+        current = Run(
+            id=uuid4(),
+            user_id=admin.id,
+            search_id=sid,
+            triggered_by=RunTrigger.manual,
+            status=RunStatus.running,
+        )
+        db.add_all([prior, current])
+        await db.commit()
+        await db.refresh(current)
+        effective = await _resolve_effective_window(db, current, config)
+
+    assert effective["search_window"] == "range"
 
 
 # ---------------------------------------------------------------------------

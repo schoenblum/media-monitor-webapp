@@ -36,7 +36,7 @@ from app.database import SessionLocal
 from app.models.language import UniversityLanguage
 from app.models.outlet import Outlet
 from app.models.result import Result
-from app.models.run import Run, RunStatus
+from app.models.run import Run, RunStatus, RunTrigger
 from app.models.search import Search
 from app.models.user import User
 from app.services.crypto import decrypt
@@ -311,6 +311,46 @@ async def execute_run(run_id: UUID, deduplicate: bool = True) -> None:
             await _mark_failed(db, run_id, f"Internal error: {exc}")
 
 
+async def _resolve_effective_window(
+    db: AsyncSession, run: Run, config: dict
+) -> dict:
+    """Return a config whose ``search_window`` reflects the run's effective mode.
+
+    Today this rewrites exactly one case: a scheduled run whose configured
+    window is ``"range"`` uses the date range as a one-time backfill on its
+    **first** completed execution, and behaves like ``"last"`` on every
+    subsequent execution. The user's stored config is preserved — we only
+    flip the window in-memory for the lookback / date_params / dedupe
+    decisions inside this run.
+
+    Manual and webhook range runs keep their existing literal-range semantics
+    because the user is explicitly asking for that fixed window each time.
+    """
+    if config.get("search_window") != "range":
+        return config
+    if run.triggered_by != RunTrigger.scheduled:
+        return config
+
+    from app.models.run import RunStatus as RS
+
+    prior = (
+        await db.execute(
+            select(Run.id)
+            .where(Run.search_id == run.search_id)
+            .where(Run.id != run.id)
+            .where(Run.status == RS.complete)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if prior is None:
+        # First scheduled run — use the configured date range as the initial
+        # backfill, exactly as the user requested.
+        return config
+    # Subsequent scheduled run — behave like "last" so we only pick up what's
+    # new since the most recent prior completed run.
+    return {**config, "search_window": "last"}
+
+
 async def _collect_recent_seen_urls(
     db: AsyncSession, search_id: UUID, current_run_id: UUID
 ) -> set[str]:
@@ -429,8 +469,14 @@ async def _execute_run_inner(
     ).scalars().all()
     languages = {str(lang.id): lang for lang in lang_rows}
 
-    days = await _compute_lookback(db, search.id, run.id, config)
-    date_params = _build_date_params(config, days)
+    # Resolve the *effective* date window for this run. For most runs this is
+    # the user's stored config unchanged; for a scheduled+range run it may
+    # flip to "last" after the initial backfill (see _resolve_effective_window).
+    # Query specs are still built from the user's literal config — only the
+    # date-window math uses the effective view.
+    effective_config = await _resolve_effective_window(db, run, config)
+    days = await _compute_lookback(db, search.id, run.id, effective_config)
+    date_params = _build_date_params(effective_config, days)
     specs = _build_query_specs(config, list(all_outlets), languages)
 
     if not specs:
@@ -441,11 +487,13 @@ async def _execute_run_inner(
         return
 
     # Pre-seed seen_urls with URLs from prior completed runs in the dedupe
-    # window — only for "last" mode, only when the per-run flag is on.
-    # "hours" / "range" are explicit user-chosen windows and intentionally
-    # allow repeats.
+    # window — only when the *effective* window is "last", only when the
+    # per-run flag is on. Explicit "hours" windows and a first scheduled
+    # range backfill skip the dedupe (the user is asking for that exact
+    # span); subsequent scheduled range runs flip to effective "last" and
+    # therefore dedupe normally.
     seen_urls: set[str] = set()
-    if deduplicate and config.get("search_window", "last") == "last":
+    if deduplicate and effective_config.get("search_window", "last") == "last":
         seen_urls = await _collect_recent_seen_urls(db, search.id, run.id)
     api_calls_used = 0
     quota_hit = False
