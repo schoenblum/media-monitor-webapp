@@ -25,6 +25,7 @@ from app.routers import (
     users,
     webhook,
 )
+from app.services.scheduler import start_scheduler, stop_scheduler
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -38,7 +39,15 @@ STATIC_DIR = Path(__file__).parent / "static"
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: D401
     await bootstrap_admin()
-    yield
+    # Start APScheduler from the lifespan rather than module import so the
+    # test suite (which never enters the lifespan) doesn't spin up a real
+    # scheduler. Both Uvicorn workers boot a scheduler; single-firing is
+    # guarded inside the fire function with a Postgres advisory lock.
+    await start_scheduler()
+    try:
+        yield
+    finally:
+        await stop_scheduler()
 
 
 app = FastAPI(

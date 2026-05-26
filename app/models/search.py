@@ -33,6 +33,14 @@ DEFAULT_SEARCH_CONFIG: dict = {
     "doi": {"text": "", "pages": 1},
     "university_name": {"enabled": False, "language_ids": [], "pages": 1},
     "outlets": {"enabled": False, "outlet_ids": []},
+    # v2.4 item 7 — manual by default. The scheduler ignores this until the
+    # user flips mode to "auto" on the Searches form.
+    "schedule": {
+        "mode": "manual",
+        "interval_hours": 24,
+        "start_time": "08:00",
+        "timezone": "Asia/Tokyo",
+    },
 }
 
 

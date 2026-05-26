@@ -213,6 +213,41 @@ dialog. Deletion is permanent.
 
 ---
 
+## 6a. Automatic (scheduled) runs
+
+Open a search and find the **Perform** section. Two choices:
+
+- **Manually** (default) — the search only runs when you click *Run now*,
+  hit the Dashboard's *Run default search*, or call the webhook.
+- **Automatically** — the server fires the search on a cadence. You pick:
+  - an **interval** (every 6 hours, daily, weekly, or a custom number of
+    hours);
+  - a **start time** (HH:MM) that anchors the cadence;
+  - a **timezone** (IANA name, default **Asia/Tokyo**) the start time is
+    interpreted in.
+
+A daily-or-longer cadence fires at the start time each day/week. A sub-daily
+cadence ("every N hours") anchors to the start time and then fires every N
+hours from there — so *Every 6 hours at 08:00* fires at 08:00, 14:00, 20:00,
+02:00 in the chosen zone.
+
+Scheduled runs use the search's own *Search window* setting and are listed
+with the **Scheduled** trigger label in Run History. Combine them with
+*Last successful run* (and leave the *Deduplicate results* checkbox on,
+which is the default for automatic runs) so each cycle returns only what's
+new since the last fire.
+
+**Date range** windows cannot be combined with automatic runs — the form
+warns and the API rejects this combination, because a fixed calendar range
+would return the same results on every fire.
+
+**When a scheduled run can't proceed** (e.g. you removed your Google
+credentials, the search has no terms, or your Google quota is exhausted),
+the run shows up in Run History as **Skipped** with the reason — so a
+forgotten recurring search never produces silence.
+
+---
+
 ## 7. Webhook automation
 
 1. Go to **Settings → Webhook API key** and click **Generate**.

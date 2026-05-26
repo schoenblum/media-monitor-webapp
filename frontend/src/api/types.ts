@@ -1,7 +1,8 @@
 export type UUID = string;
 
 export type UserRole = "admin" | "user";
-export type RunStatus = "pending" | "running" | "complete" | "failed";
+export type RunStatus = "pending" | "running" | "complete" | "failed" | "skipped";
+export type RunTrigger = "manual" | "webhook" | "scheduled";
 
 // ---------------------------------------------------------------------------
 // University language
@@ -132,6 +133,13 @@ export interface OutletsConfig {
   outlet_ids: UUID[];
 }
 
+export interface ScheduleConfig {
+  mode: "manual" | "auto";
+  interval_hours: number;
+  start_time: string;  // HH:MM, 24-hour
+  timezone: string;    // IANA name, e.g. "Asia/Tokyo"
+}
+
 export interface SearchConfig {
   search_window: "last" | "hours" | "range";
   fallback_hours: number;
@@ -142,6 +150,7 @@ export interface SearchConfig {
   doi: DoiConfig;
   university_name: UniversityNameConfig;
   outlets: OutletsConfig;
+  schedule: ScheduleConfig;
 }
 
 export function defaultSearchConfig(): SearchConfig {
@@ -155,6 +164,12 @@ export function defaultSearchConfig(): SearchConfig {
     doi: { text: "", pages: 1 },
     university_name: { enabled: false, language_ids: [], pages: 1 },
     outlets: { enabled: false, outlet_ids: [] },
+    schedule: {
+      mode: "manual",
+      interval_hours: 24,
+      start_time: "08:00",
+      timezone: "Asia/Tokyo",
+    },
   };
 }
 
@@ -230,7 +245,7 @@ export interface Outlet {
 export interface Run {
   id: UUID;
   search_id: UUID;
-  triggered_by: "manual" | "webhook";
+  triggered_by: RunTrigger;
   status: RunStatus;
   started_at: string;
   completed_at: string | null;

@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { Outlet, Search, SearchConfig, SearchTermConfig, UniversityLanguage, UUID } from "../api/types";
+import type { Outlet, ScheduleConfig, Search, SearchConfig, SearchTermConfig, UniversityLanguage, UUID } from "../api/types";
 import { ALL_LANGUAGES, defaultSearchConfig } from "../api/types";
 
 function labelFor(code: string): string {
@@ -168,7 +168,14 @@ function SearchEditor({
       setSearch(s);
       setName(s.name);
       setIsDefault(s.is_default);
-      setConfig(s.config ?? defaultSearchConfig());
+      // Merge with defaults so configs saved before a field was added (e.g.
+      // schedule for pre-v2.4 searches) get the default values until next save.
+      const defaults = defaultSearchConfig();
+      setConfig({
+        ...defaults,
+        ...(s.config ?? {}),
+        schedule: { ...defaults.schedule, ...(s.config?.schedule ?? {}) },
+      });
       setLanguages(langs);
       setOutlets(outs);
     })();
@@ -633,16 +640,40 @@ function SearchEditor({
         )}
       </Section>
 
+      {/* §6 Perform (manual vs automatic schedule) */}
+      <Section title="Perform">
+        <ScheduleEditor
+          schedule={config.schedule}
+          searchWindow={config.search_window}
+          onChange={(schedule) => setConfig({ ...config, schedule })}
+        />
+      </Section>
+
       {/* Validation notice */}
       {!isValid && (
         <p className="text-sm text-amber-700 bg-amber-50 rounded-md px-3 py-2">
           Add at least one non-empty search term, a DOI, or enable University Name with at least one language before running.
         </p>
       )}
+      {config.schedule.mode === "auto" && config.search_window === "range" && (
+        <p className="text-sm text-red-700 bg-red-50 rounded-md px-3 py-2">
+          Automatic runs cannot use a fixed <strong>Date range</strong> window —
+          switch the Search window to <em>Last successful run</em> or{" "}
+          <em>Previous hours</em> before saving. The save will be rejected as long
+          as both are set.
+        </p>
+      )}
 
       {/* Footer actions */}
       <div className="flex items-center gap-3">
-        <button className="btn-primary" disabled={saving} onClick={save}>
+        <button
+          className="btn-primary"
+          disabled={
+            saving ||
+            (config.schedule.mode === "auto" && config.search_window === "range")
+          }
+          onClick={save}
+        >
           {saving && <Spinner />} Save changes
         </button>
         {savedAt && (
@@ -652,6 +683,147 @@ function SearchEditor({
         )}
         {saveError && <span className="text-xs text-red-600">{saveError}</span>}
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Schedule editor
+// ---------------------------------------------------------------------------
+
+// Common IANA zones surfaced as quick picks. The free-text input still accepts
+// any IANA name (validation happens server-side via zoneinfo.available_timezones).
+const TIMEZONE_PRESETS = [
+  "Asia/Tokyo",
+  "UTC",
+  "Europe/Berlin",
+  "Europe/London",
+  "America/New_York",
+  "America/Los_Angeles",
+  "Asia/Shanghai",
+  "Asia/Seoul",
+  "Australia/Sydney",
+];
+
+function ScheduleEditor({
+  schedule,
+  searchWindow,
+  onChange,
+}: {
+  schedule: ScheduleConfig;
+  searchWindow: "last" | "hours" | "range";
+  onChange: (s: ScheduleConfig) => void;
+}) {
+  const isAuto = schedule.mode === "auto";
+  const presetForInterval = (h: number) =>
+    h === 6 ? "6h" : h === 24 ? "daily" : h === 168 ? "weekly" : "custom";
+  const currentPreset = presetForInterval(schedule.interval_hours);
+
+  return (
+    <div className="space-y-3 text-sm">
+      <div className="flex flex-wrap gap-4">
+        <label className="flex items-center gap-2">
+          <input
+            type="radio"
+            checked={!isAuto}
+            onChange={() => onChange({ ...schedule, mode: "manual" })}
+          />
+          Manually
+        </label>
+        <label className="flex items-center gap-2">
+          <input
+            type="radio"
+            checked={isAuto}
+            onChange={() => onChange({ ...schedule, mode: "auto" })}
+          />
+          Automatically
+        </label>
+      </div>
+
+      {isAuto && (
+        <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-slate-500">Interval</span>
+              <select
+                className="input"
+                value={currentPreset}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === "6h") onChange({ ...schedule, interval_hours: 6 });
+                  else if (v === "daily") onChange({ ...schedule, interval_hours: 24 });
+                  else if (v === "weekly") onChange({ ...schedule, interval_hours: 168 });
+                  // "custom" leaves interval_hours as-is so the user can edit
+                  // the numeric field below.
+                }}
+              >
+                <option value="6h">Every 6 hours</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="custom">Custom — every N hours</option>
+              </select>
+            </label>
+            {currentPreset === "custom" && (
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-slate-500">Every N hours</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={8760}
+                  className="input w-24"
+                  value={schedule.interval_hours}
+                  onChange={(e) => {
+                    const n = parseInt(e.target.value, 10);
+                    if (Number.isFinite(n) && n >= 1) {
+                      onChange({ ...schedule, interval_hours: n });
+                    }
+                  }}
+                />
+              </label>
+            )}
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-slate-500">Start time</span>
+              <input
+                type="time"
+                className="input"
+                value={schedule.start_time}
+                onChange={(e) => onChange({ ...schedule, start_time: e.target.value })}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-slate-500">Timezone (IANA)</span>
+              <input
+                type="text"
+                className="input w-44"
+                list="tz-presets"
+                value={schedule.timezone}
+                onChange={(e) => onChange({ ...schedule, timezone: e.target.value })}
+                placeholder="Asia/Tokyo"
+              />
+              <datalist id="tz-presets">
+                {TIMEZONE_PRESETS.map((tz) => (
+                  <option key={tz} value={tz} />
+                ))}
+              </datalist>
+            </label>
+          </div>
+          <p className="text-xs text-slate-500">
+            The start time anchors the cadence in the chosen timezone. Daily and
+            weekly intervals fire at <strong>{schedule.start_time}</strong> each
+            day/week; sub-daily intervals fire at the next start-time-aligned
+            slot, then every {schedule.interval_hours} hours from there.
+            Scheduled runs reuse the search's own <em>Search window</em> setting
+            — combine with <em>Last successful run</em> for "only what's new
+            each cycle".
+          </p>
+          {searchWindow === "range" && (
+            <p className="text-xs text-red-700">
+              <strong>Date range</strong> windows cannot be combined with
+              automatic runs — pick a different Search window above.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -15,3 +15,10 @@ cryptography==44.0.0
 email-validator==2.2.0
 python-dotenv==1.0.1
 aiosmtplib==3.0.1
+# v2.4 item 7 — scheduled (automatic) runs. APScheduler is used in-process
+# inside FastAPI's lifespan; single-firing across the two Uvicorn workers is
+# guarded by a Postgres advisory lock (see app/services/scheduler.py).
+# tzdata ships the IANA zone database on systems (like slim Linux images)
+# where the OS may not provide /usr/share/zoneinfo.
+APScheduler==3.10.4
+tzdata==2024.2

@@ -11,6 +11,7 @@ from app.deps import get_current_user
 from app.models.search import DEFAULT_SEARCH_CONFIG, Search
 from app.models.user import User
 from app.schemas.search import SearchConfig, SearchCreate, SearchOut, SearchUpdate
+from app.services.scheduler import register_search_job, remove_search_job
 
 
 router = APIRouter(prefix="/searches", tags=["searches"])
@@ -80,6 +81,7 @@ async def create_search(
     db.add(new)
     await db.commit()
     await db.refresh(new)
+    await register_search_job(new)
     return _search_to_out(new)
 
 
@@ -113,6 +115,9 @@ async def update_search(
     s.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(s)
+    # Re-derive the scheduler job from the new config — covers transitions
+    # between auto and manual, interval / start_time / tz changes, etc.
+    await register_search_job(s)
     return _search_to_out(s)
 
 
@@ -123,8 +128,10 @@ async def delete_search(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     s = await _load_for_user(db, current.id, search_id)
+    sid = s.id
     await db.delete(s)
     await db.commit()
+    await remove_search_job(sid)
 
 
 def validate_search_config(config: dict) -> bool:
