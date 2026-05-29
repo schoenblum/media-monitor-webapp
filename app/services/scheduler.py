@@ -329,7 +329,30 @@ async def start_scheduler() -> None:
     _scheduler = AsyncIOScheduler(jobstores=jobstores, timezone=timezone.utc)
     _scheduler.start()
     await reconcile_jobs()
+    _register_reaper_job()
     logger.info("Scheduler started; %d job(s) registered", len(_scheduler.get_jobs()))
+
+
+def _register_reaper_job() -> None:
+    """Register the periodic stuck-run reaper (v2.5).
+
+    No advisory lock needed: ``reap_stuck_runs`` is an idempotent UPDATE, so
+    both workers running it every few minutes is harmless.
+    """
+    if _scheduler is None:
+        return
+    from apscheduler.triggers.interval import IntervalTrigger
+
+    from app.services.search_engine import reap_stuck_runs
+
+    _scheduler.add_job(
+        reap_stuck_runs,
+        trigger=IntervalTrigger(minutes=5),
+        id="mm-reaper",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
 
 
 async def stop_scheduler() -> None:

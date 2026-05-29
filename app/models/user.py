@@ -28,6 +28,13 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     google_api_key_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     search_engine_id_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # Webhook API keys are issued as "<key_id>.<secret>". ``webhook_key_id`` is
+    # the indexed public lookup half (so verification is a single-row fetch,
+    # not a bcrypt scan over every user); ``webhook_api_key_hash`` stores the
+    # SHA-256 of the high-entropy secret half. See app/routers/webhook.py.
+    webhook_key_id: Mapped[str | None] = mapped_column(
+        String(32), unique=True, nullable=True, index=True
+    )
     webhook_api_key_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

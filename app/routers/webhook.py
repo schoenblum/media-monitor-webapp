@@ -11,7 +11,7 @@ from app.models.run import Run, RunStatus, RunTrigger
 from app.models.search import Search
 from app.models.user import User
 from app.services.search_engine import execute_run
-from app.services.security import verify_token
+from app.services.security import split_webhook_key, verify_webhook_secret
 
 
 router = APIRouter(prefix="/webhook", tags=["webhook"])
@@ -36,17 +36,27 @@ async def trigger_via_webhook(
     if not x_api_key:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing X-API-Key")
 
-    candidates = (
-        await db.execute(
-            select(User).where(User.webhook_api_key_hash.is_not(None), User.is_active.is_(True))
-        )
-    ).scalars().all()
-
+    # Keys are "<key_id>.<secret>": look the user up by the indexed key_id
+    # (single row), then constant-time compare the secret. This avoids the old
+    # bcrypt-verify-against-every-user scan, which both failed to scale and let
+    # an attacker force N bcrypt computations per unauthenticated request.
+    parsed = split_webhook_key(x_api_key)
     user: User | None = None
-    for candidate in candidates:
-        if candidate.webhook_api_key_hash and verify_token(x_api_key, candidate.webhook_api_key_hash):
+    if parsed is not None:
+        key_id, secret = parsed
+        candidate = (
+            await db.execute(
+                select(User).where(
+                    User.webhook_key_id == key_id, User.is_active.is_(True)
+                )
+            )
+        ).scalar_one_or_none()
+        if (
+            candidate is not None
+            and candidate.webhook_api_key_hash
+            and verify_webhook_secret(secret, candidate.webhook_api_key_hash)
+        ):
             user = candidate
-            break
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 

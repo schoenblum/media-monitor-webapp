@@ -54,3 +54,37 @@ sudo -u deploy bash -c '
 
 The backup directory keeps the **14 most recent** daily dumps; older files are
 pruned by the service unit.
+
+## Off-box backups (v2.5)
+
+Local dumps share the VM's disk, so a lost volume takes both the database and
+its backups. To copy dumps off the box, set `BACKUP_REMOTE` in
+`/etc/media-monitor/backup.env` to an `rclone` remote; the backup service then
+mirrors the dump directory there after each run.
+
+```bash
+# 1. Install rclone (Ubuntu): sudo apt-get install -y rclone   (or the official script)
+# 2. As the deploy user, configure a remote (Hetzner Storage Box via SFTP,
+#    Backblaze B2, S3, etc.):
+sudo -u deploy rclone config        # creates a remote, e.g. "hetzner-box"
+# 3. Point the backup at it and re-install the unit:
+sudo $EDITOR /etc/media-monitor/backup.env    # BACKUP_REMOTE=hetzner-box:media-monitor
+sudo install -o root -g root -m 0644 ops/media-monitor-backup.service \
+    /etc/systemd/system/media-monitor-backup.service
+sudo systemctl daemon-reload
+sudo systemctl start media-monitor-backup.service     # test
+sudo -u deploy rclone ls hetzner-box:media-monitor    # confirm dumps landed
+```
+
+A failed off-box sync marks the unit failed (visible in
+`systemctl status media-monitor-backup.service`) but never deletes or corrupts
+the local dump, which is written first. Also consider enabling Hetzner's own
+VM snapshots in the Cloud Console as a second, independent layer.
+
+## Login / webhook rate limiting (v2.5)
+
+`nginx-rate-limit.conf` documents the `limit_req` snippet applied to
+`/api/v1/auth/login` and `/api/v1/webhook/run` to blunt brute-force and
+credential-stuffing. It is applied directly in the site's nginx config on the
+host (the nginx config is not otherwise tracked in this repo); the file here is
+the reference copy. Reload with `sudo nginx -t && sudo systemctl reload nginx`.

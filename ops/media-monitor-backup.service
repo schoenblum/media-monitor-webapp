@@ -24,6 +24,15 @@ ExecStart=/usr/bin/bash -c '\
 ExecStartPost=/usr/bin/bash -c '\
     ls -1t /var/backups/media_monitor/media_monitor_*.dump 2>/dev/null \
         | tail -n +15 | xargs -r rm -f'
+# Off-box copy (optional, v2.5). If BACKUP_REMOTE is set in backup.env, mirror
+# the backup directory to that rclone remote so a lost VM/disk doesn't take the
+# only copy of the database with it. `sync` keeps the remote matching the local
+# 14-dump set. No-op (success) when BACKUP_REMOTE is unset or rclone is absent,
+# so the local backup never fails just because off-box isn't configured yet.
+ExecStartPost=/usr/bin/bash -c '\
+    test -z "$BACKUP_REMOTE" && exit 0; \
+    command -v rclone >/dev/null 2>&1 || { echo "rclone not installed — off-box push skipped"; exit 0; }; \
+    rclone sync /var/backups/media_monitor "$BACKUP_REMOTE" --transfers 2'
 
 [Install]
 WantedBy=multi-user.target

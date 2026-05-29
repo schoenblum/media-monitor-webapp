@@ -6,6 +6,7 @@ import { triggerLabel } from "../api/types";
 import { RunStatusPill } from "../components/RunStatusPill";
 import { Spinner } from "../components/Spinner";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { EmailExportDialog } from "../components/EmailExportDialog";
 import { sourceHostFor } from "../utils/source";
 import { useAuth } from "../auth";
 
@@ -114,14 +115,6 @@ export default function RunHistory() {
 
   return (
     <div className="card p-4">
-      {showPerformedBy && (
-        <div className="mb-3 rounded-md bg-sky-50 px-3 py-2 text-xs text-sky-900">
-          Showing <strong>shared</strong> run history for{" "}
-          <strong>{user?.university_name ?? "your university"}</strong>. Any member
-          can view (and toggle result selections on) any run; only the run's performer
-          can delete it.
-        </div>
-      )}
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="flex-1 text-base font-semibold">Run history</h2>
         <select
@@ -303,9 +296,11 @@ function MergeView({
   runs: Run[];
   onClose: () => void;
 }) {
+  const { user } = useAuth();
   const [items, setItems] = useState<Result[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Set<UUID>>(new Set());
+  const [emailOpen, setEmailOpen] = useState(false);
 
   const runLabels = runIds.map((id) => {
     const r = runs.find((x) => x.id === id);
@@ -390,8 +385,11 @@ function MergeView({
           <h2 className="flex-1 text-base font-semibold">
             Merged view — {runIds.length} run{runIds.length > 1 ? "s" : ""}
           </h2>
+          <button className="btn-secondary" onClick={() => setEmailOpen(true)}>
+            Email CSV
+          </button>
           <button className="btn-primary" onClick={exportCsv}>
-            Export CSV
+            Download CSV
           </button>
         </div>
         <p className="mt-1 text-xs text-slate-500">
@@ -506,6 +504,13 @@ function MergeView({
           </div>
         )}
       </div>
+
+      <EmailExportDialog
+        open={emailOpen}
+        onClose={() => setEmailOpen(false)}
+        runIds={runIds}
+        defaultEmail={user?.email ?? ""}
+      />
     </div>
   );
 }

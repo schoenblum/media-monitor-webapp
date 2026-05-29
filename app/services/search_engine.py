@@ -23,13 +23,13 @@ Query composition rules (revision v2.2):
 """
 import asyncio
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from math import ceil
 from typing import NamedTuple
 from uuid import UUID
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import SessionLocal
@@ -58,6 +58,17 @@ MAX_PAGES = 10
 # (dedupe is correctness, not preference); the per-run on/off lives on the
 # trigger payload via Schemas.RunCreate.deduplicate.
 DEDUPE_WINDOW_DAYS = 2
+
+# v2.5 — orphan/stuck run recovery. Runs execute in-process (BackgroundTasks /
+# asyncio.create_task), so a deploy restart, crash, or OOM kills any in-flight
+# run and leaves it stuck in pending/running forever. ``reap_stuck_runs`` (a
+# periodic scheduler job) fails any run still pending/running past this many
+# minutes; ``reap_orphaned_runs`` (lifespan startup) fails every leftover
+# pending/running row outright, because nothing can legitimately still be
+# executing in a freshly-started process. A run with a live executor will
+# simply re-set itself to ``running`` on its next page, so the startup sweep
+# never harms an active run. See execute_run's cooperative-cancel check.
+STUCK_RUN_THRESHOLD_MINUTES = 60
 
 
 class QuerySpec(NamedTuple):
@@ -410,6 +421,82 @@ async def _mark_failed(db: AsyncSession, run_id: UUID, message: str) -> None:
     await db.commit()
 
 
+# ---------------------------------------------------------------------------
+# Orphan / stuck run recovery (v2.5)
+# ---------------------------------------------------------------------------
+
+
+async def _fail_runs_where(where_clause, message: str) -> int:
+    """Mark every run matching ``where_clause`` as failed. Returns the count."""
+    async with SessionLocal() as db:
+        runs = (
+            await db.execute(
+                select(Run).where(
+                    Run.status.in_([RunStatus.pending, RunStatus.running]),
+                    where_clause,
+                )
+            )
+        ).scalars().all()
+        if not runs:
+            return 0
+        now = datetime.now(timezone.utc)
+        for run in runs:
+            run.status = RunStatus.failed
+            run.error_message = message
+            run.completed_at = now
+        await db.commit()
+        return len(runs)
+
+
+async def reap_orphaned_runs() -> int:
+    """Fail every pending/running run left over from a previous process.
+
+    Called once from the FastAPI lifespan on startup. A freshly-started worker
+    cannot have any run legitimately executing yet, so anything still
+    pending/running is an orphan from a prior process (deploy restart, crash,
+    OOM). Idempotent across the two workers.
+    """
+    n = await _fail_runs_where(
+        Run.id.isnot(None),
+        "This run was interrupted by a server restart before it finished. "
+        "Re-run the search to try again.",
+    )
+    if n:
+        logger.warning("Reaped %d orphaned run(s) left pending/running at startup", n)
+    return n
+
+
+async def reap_stuck_runs() -> int:
+    """Fail runs stuck pending/running past ``STUCK_RUN_THRESHOLD_MINUTES``.
+
+    Registered as a periodic scheduler job. Catches runs that hang during
+    normal operation (e.g. a wedged HTTP call) rather than at restart.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=STUCK_RUN_THRESHOLD_MINUTES)
+    n = await _fail_runs_where(
+        Run.started_at < cutoff,
+        f"This run did not finish within {STUCK_RUN_THRESHOLD_MINUTES} minutes "
+        "and was stopped. Re-run the search to try again.",
+    )
+    if n:
+        logger.warning("Reaped %d stuck run(s) older than %d min", n, STUCK_RUN_THRESHOLD_MINUTES)
+    return n
+
+
+async def _run_is_active(db: AsyncSession, run_id: UUID) -> bool:
+    """True while the run is still ``running``.
+
+    execute_run polls this between pages so an external state change — a user
+    cancel (``POST /runs/{id}/cancel``) or the stuck-run reaper — stops the
+    work promptly instead of letting the loop run to completion and overwrite
+    the cancelled/failed status. Partial results already committed are kept.
+    """
+    status = (
+        await db.execute(select(Run.status).where(Run.id == run_id))
+    ).scalar_one_or_none()
+    return status == RunStatus.running
+
+
 async def _execute_run_inner(
     run_id: UUID, db: AsyncSession, *, deduplicate: bool = True
 ) -> None:
@@ -515,6 +602,9 @@ async def _execute_run_inner(
                     domain = _normalise_domain(outlet.domain)
                     full_query = f"{spec.query} site:{domain}"
                     for page in range(pages):
+                        if not await _run_is_active(db, run.id):
+                            logger.info("Run %s cancelled/reaped mid-flight — stopping early", run.id)
+                            return
                         start = page * 10 + 1
                         items, quota, err = await _fetch_page(
                             client, api_key, engine_id, full_query, start, date_params
@@ -549,6 +639,9 @@ async def _execute_run_inner(
                 for page in range(pages):
                     if quota_hit:
                         break
+                    if not await _run_is_active(db, run.id):
+                        logger.info("Run %s cancelled/reaped mid-flight — stopping early", run.id)
+                        return
                     start = page * 10 + 1
                     items, quota, err = await _fetch_page(
                         client, api_key, engine_id, spec.query, start, date_params
@@ -585,6 +678,51 @@ async def _execute_run_inner(
         run.status = RunStatus.complete
         run.error_message = last_error
     await db.commit()
+
+    if run.status == RunStatus.complete:
+        await _maybe_notify(db, run, search, user)
+
+
+async def _maybe_notify(db: AsyncSession, run: Run, search: Search, user: User) -> None:
+    """Email the configured recipient when an unattended run finds new hits.
+
+    Fires only for **scheduled** and **webhook** runs (manual runs are watched
+    live in the UI) that completed with at least one new result, and only when
+    ``config.notify.enabled`` is set. The recipient defaults to the search
+    owner's login email when no explicit address is configured. Best-effort:
+    a delivery failure is logged, never raised, so it can't fail the run.
+    """
+    from app.services.email import send_run_notification
+
+    if run.triggered_by == RunTrigger.manual:
+        return
+    notify = (search.config or {}).get("notify") or {}
+    if not notify.get("enabled"):
+        return
+    hit_count = (
+        await db.execute(select(func.count(Result.id)).where(Result.run_id == run.id))
+    ).scalar_one()
+    if not hit_count:
+        return
+    recipient = (notify.get("email") or "").strip() or user.email
+    sample = (
+        await db.execute(
+            select(Result.title, Result.url)
+            .where(Result.run_id == run.id)
+            .order_by(Result.date_extracted.desc())
+            .limit(10)
+        )
+    ).all()
+    try:
+        await send_run_notification(
+            to=recipient,
+            search_name=search.name,
+            run_id=run.id,
+            hit_count=int(hit_count),
+            samples=[(t, u) for t, u in sample],
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Run %s: notification email to %s failed: %s", run.id, recipient, exc)
 
 
 def _make_result_rows(

@@ -274,6 +274,7 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ result_ids, selected }),
     }),
+  cancelRun: (id: UUID) => request<Run>(`/runs/${id}/cancel`, { method: "POST" }),
   deleteRun: (id: UUID) => request<void>(`/runs/${id}`, { method: "DELETE" }),
   bulkDeleteRuns: (run_ids: UUID[]) =>
     request<void>("/runs/bulk-delete", { method: "POST", body: JSON.stringify({ run_ids }) }),
@@ -281,6 +282,11 @@ export const api = {
     const params = run_ids.map((r) => `run_ids[]=${encodeURIComponent(r)}`).join("&");
     return fetchBlob(`/runs/export?${params}`);
   },
+  emailRuns: (run_ids: UUID[], email: string) =>
+    request<{ sent: boolean; email: string; count: number }>("/runs/export-email", {
+      method: "POST",
+      body: JSON.stringify({ run_ids, email }),
+    }),
 
   // Universities (admin only)
   listUniversities: () => request<University[]>("/universities"),

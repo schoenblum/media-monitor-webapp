@@ -17,6 +17,10 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str
     FERNET_KEY: str
+    # Optional comma-separated list of *older* Fernet keys, kept only so
+    # credentials encrypted under a previous key stay readable during a key
+    # rotation. New ciphertext always uses FERNET_KEY. See HANDOVER §7.3.
+    FERNET_KEYS: Optional[str] = None
 
     SMTP_HOST: Optional[str] = None
     SMTP_PORT: int = 587

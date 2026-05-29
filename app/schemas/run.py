@@ -2,7 +2,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, EmailStr
 
 from app.models.run import RunStatus, RunTrigger
 
@@ -69,3 +69,9 @@ class ResultsPage(BaseModel):
 
 class BulkDeleteRequest(BaseModel):
     run_ids: list[UUID]
+
+
+class EmailExportRequest(BaseModel):
+    """Email the CSV of selected hits across the given runs to an address."""
+    run_ids: list[UUID]
+    email: EmailStr

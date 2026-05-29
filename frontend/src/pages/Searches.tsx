@@ -1,8 +1,9 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { Outlet, ScheduleConfig, Search, SearchConfig, SearchTermConfig, UniversityLanguage, UUID } from "../api/types";
+import type { NotifyConfig, Outlet, ScheduleConfig, Search, SearchConfig, SearchTermConfig, UniversityLanguage, UUID } from "../api/types";
 import { ALL_LANGUAGES, defaultSearchConfig } from "../api/types";
+import { useAuth } from "../auth";
 
 function labelFor(code: string): string {
   return ALL_LANGUAGES.find((l) => l.code === code)?.label ?? code;
@@ -147,6 +148,7 @@ function SearchEditor({
   onDelete: (s: Search) => void;
   onRun: (id: UUID, deduplicate: boolean) => void;
 }) {
+  const { user } = useAuth();
   const [search, setSearch] = useState<Search | null>(null);
   const [name, setName] = useState("");
   const [isDefault, setIsDefault] = useState(false);
@@ -175,6 +177,7 @@ function SearchEditor({
         ...defaults,
         ...(s.config ?? {}),
         schedule: { ...defaults.schedule, ...(s.config?.schedule ?? {}) },
+        notify: { ...defaults.notify, ...(s.config?.notify ?? {}) },
       });
       setLanguages(langs);
       setOutlets(outs);
@@ -649,6 +652,20 @@ function SearchEditor({
         />
       </Section>
 
+      {/* §7 Notify (email on unattended runs) */}
+      <Section
+        title="Notify by email"
+        toggle
+        enabled={config.notify.enabled}
+        onToggle={(v) => setConfig({ ...config, notify: { ...config.notify, enabled: v } })}
+      >
+        <NotifyEditor
+          notify={config.notify}
+          loginEmail={user?.email ?? ""}
+          onChange={(notify) => setConfig({ ...config, notify })}
+        />
+      </Section>
+
       {/* Validation notice */}
       {!isValid && (
         <p className="text-sm text-amber-700 bg-amber-50 rounded-md px-3 py-2">
@@ -839,6 +856,49 @@ function ScheduleEditor({
           </p>
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Notify editor
+// ---------------------------------------------------------------------------
+
+function NotifyEditor({
+  notify,
+  loginEmail,
+  onChange,
+}: {
+  notify: NotifyConfig;
+  loginEmail: string;
+  onChange: (n: NotifyConfig) => void;
+}) {
+  if (!notify.enabled) {
+    return (
+      <p className="text-sm text-slate-500">
+        Off — automatic (scheduled) and webhook runs won't send email. Manual runs
+        never email; you review those here in the app.
+      </p>
+    );
+  }
+  return (
+    <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+      <label className="flex flex-col gap-1">
+        <span className="text-xs text-slate-500">Send notifications to</span>
+        <input
+          type="email"
+          className="input w-72"
+          value={notify.email}
+          placeholder={loginEmail || "you@example.com"}
+          onChange={(e) => onChange({ ...notify, email: e.target.value })}
+        />
+      </label>
+      <p className="text-xs text-slate-500">
+        When a <strong>scheduled</strong> or <strong>webhook</strong> run finds at
+        least one new hit, we email a summary with a link to review and export.
+        Leave blank to use your login address
+        {loginEmail ? <> (<strong>{loginEmail}</strong>)</> : null}.
+      </p>
     </div>
   );
 }

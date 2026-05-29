@@ -17,6 +17,7 @@ from app.models.search import Search
 from app.models.user import User
 from app.schemas.run import (
     BulkDeleteRequest,
+    EmailExportRequest,
     ResultOut,
     ResultSelectionUpdate,
     ResultsPage,
@@ -28,6 +29,54 @@ from app.services.search_engine import execute_run
 
 
 router = APIRouter(prefix="/runs", tags=["runs"])
+
+
+async def _selected_results_csv(db: AsyncSession, run_ids: list[UUID]) -> tuple[bytes, int]:
+    """Build the UTF-8-BOM CSV of all ``is_selected`` results across runs.
+
+    Shared by the download (`/runs/export`) and email (`/runs/export-email`)
+    paths. Returns ``(csv_bytes, row_count)``.
+    """
+    rows = (
+        await db.execute(
+            select(Result).where(Result.run_id.in_(run_ids), Result.is_selected.is_(True))
+        )
+    ).scalars().all()
+
+    # Date descending, blank dates last (stable across the multi-key sorts).
+    rows_sorted: Sequence[Result] = sorted(rows, key=lambda r: r.date_extracted or "", reverse=True)
+    rows_sorted = sorted(rows_sorted, key=lambda r: 0 if r.date_extracted else 1)
+
+    buf = io.StringIO()
+    buf.write("﻿")  # BOM for Excel UTF-8
+    writer = csv.writer(buf, quoting=csv.QUOTE_ALL, lineterminator="\r\n")
+    writer.writerow(["Date", "Media", "Language", "Headline", "URL"])
+    for r in rows_sorted:
+        writer.writerow([
+            r.date_extracted,
+            r.outlet_name,
+            (r.detected_lang or "").upper(),
+            r.title,
+            r.url,
+        ])
+    return buf.getvalue().encode("utf-8"), len(rows_sorted)
+
+
+async def _authorize_runs(db: AsyncSession, run_ids: list[UUID], current: User) -> None:
+    """Raise 400/403 unless every run in ``run_ids`` is visible to ``current``."""
+    if not run_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No run_ids provided")
+    runs = (
+        await db.execute(
+            select(Run.id).where(Run.id.in_(run_ids), shared_read_filter(Run, current))
+        )
+    ).scalars().all()
+    visible_ids = set(runs)
+    for rid in run_ids:
+        if rid not in visible_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail=f"Not authorised for run {rid}"
+            )
 
 
 async def _run_to_out(
@@ -191,55 +240,51 @@ async def export_runs(
     db: AsyncSession = Depends(get_db),
 ) -> StreamingResponse:
     """Export all `is_selected=true` results across the given runs as a single CSV."""
-    if not run_ids:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No run_ids provided")
-    runs = (
-        await db.execute(
-            select(Run).where(Run.id.in_(run_ids), shared_read_filter(Run, current))
-        )
-    ).scalars().all()
-    visible_ids = {r.id for r in runs}
-    for rid in run_ids:
-        if rid not in visible_ids:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail=f"Not authorised for run {rid}"
-            )
-
-    rows = (
-        await db.execute(
-            select(Result).where(Result.run_id.in_(run_ids), Result.is_selected.is_(True))
-        )
-    ).scalars().all()
-
-    def _date_key(r: Result) -> tuple[int, str]:
-        return (0 if r.date_extracted else 1, r.date_extracted or "")
-
-    rows_sorted: Sequence[Result] = sorted(rows, key=_date_key)
-    rows_sorted = sorted(rows_sorted, key=lambda r: r.date_extracted or "", reverse=True)
-    rows_sorted = sorted(rows_sorted, key=lambda r: 0 if r.date_extracted else 1)
-
-    buf = io.StringIO()
-    buf.write("﻿")  # BOM for Excel UTF-8
-    writer = csv.writer(buf, quoting=csv.QUOTE_ALL, lineterminator="\r\n")
-    writer.writerow(["Date", "Media", "Language", "Headline", "URL"])
-    for r in rows_sorted:
-        writer.writerow([
-            r.date_extracted,
-            r.outlet_name,
-            (r.detected_lang or "").upper(),
-            r.title,
-            r.url,
-        ])
+    await _authorize_runs(db, run_ids, current)
+    out_bytes, _ = await _selected_results_csv(db, run_ids)
 
     from datetime import date
 
     filename = f"media_hits_{date.today().strftime('%Y%m%d')}.csv"
-    out_bytes = buf.getvalue().encode("utf-8")
     return StreamingResponse(
         io.BytesIO(out_bytes),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.post("/export-email")
+async def export_runs_email(
+    payload: EmailExportRequest,
+    current: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Email the CSV of selected hits across the given runs to an address.
+
+    Same CSV as ``/runs/export``, delivered as an attachment to the supplied
+    address (the UI pre-fills the requester's own login email but allows any).
+    """
+    await _authorize_runs(db, payload.run_ids, current)
+    out_bytes, count = await _selected_results_csv(db, payload.run_ids)
+    if count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No selected hits to export — tick at least one result first.",
+        )
+
+    from datetime import date
+
+    from app.services.email import send_export_email
+
+    filename = f"media_hits_{date.today().strftime('%Y%m%d')}.csv"
+    sent = await send_export_email(str(payload.email), out_bytes, filename, count)
+    if not sent:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Email could not be sent (mail server not configured or unavailable). "
+            "Use Download instead.",
+        )
+    return {"sent": True, "email": str(payload.email), "count": count}
 
 
 @router.get("/{run_id}", response_model=RunOut)
@@ -318,16 +363,53 @@ async def update_result_selection(
     await db.commit()
 
 
+@router.post("/{run_id}/cancel", response_model=RunOut)
+async def cancel_run(
+    run_id: UUID,
+    current: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> RunOut:
+    """Stop a pending/running run. Any member who can see it may cancel it.
+
+    Marks the run failed with a "Cancelled" message; the background executor
+    notices the status change between pages and stops, keeping whatever
+    partial results it already saved.
+    """
+    run = await db.get(Run, run_id)
+    if run is None or not await _can_view_run(run, current):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    if run.status not in (RunStatus.pending, RunStatus.running):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Run is no longer in progress.",
+        )
+    from datetime import datetime, timezone
+
+    run.status = RunStatus.failed
+    run.error_message = f"Cancelled by {current.email}."
+    run.completed_at = datetime.now(timezone.utc)
+    await db.commit()
+    search = await db.get(Search, run.search_id)
+    performer = await db.get(User, run.user_id)
+    return await _run_to_out(
+        db,
+        run,
+        search_name=search.name if search else None,
+        performer_email=performer.email if performer else None,
+    )
+
+
 @router.delete("/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_run(
     run_id: UUID,
     current: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    # Only the performer (or a future admin endpoint) can delete a run, so
-    # one member can't blow away another member's run history.
+    # Any member who can see the run (its performer, or anyone sharing its
+    # university affiliation) may delete it. This keeps shared run history
+    # tidy — e.g. removing ghost entries left behind after a member leaves.
     run = await db.get(Run, run_id)
-    if run is None or run.user_id != current.id:
+    if run is None or not await _can_view_run(run, current):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     await db.delete(run)
     await db.commit()
@@ -341,14 +423,17 @@ async def bulk_delete_runs(
 ) -> None:
     if not payload.run_ids:
         return
-    owned = (
+    # Deletable = any run visible under the affiliation scope (see delete_run).
+    visible = (
         await db.execute(
-            select(Run.id).where(Run.id.in_(payload.run_ids), Run.user_id == current.id)
+            select(Run.id).where(
+                Run.id.in_(payload.run_ids), shared_read_filter(Run, current)
+            )
         )
     ).scalars().all()
-    owned_set = set(owned)
+    visible_set = set(visible)
     for rid in payload.run_ids:
-        if rid not in owned_set:
+        if rid not in visible_set:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail=f"Not authorised for run {rid}"
             )

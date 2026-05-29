@@ -39,6 +39,18 @@ class OutletsConfig(BaseModel):
     outlet_ids: list[str] = []
 
 
+class NotifyConfig(BaseModel):
+    """Email notification for unattended (scheduled / webhook) runs (v2.5).
+
+    When ``enabled``, a completed scheduled or webhook run that found at least
+    one new hit emails ``email`` (defaulting to the search owner's login
+    address when blank). Manual runs never notify — the user is watching the
+    UI live.
+    """
+    enabled: bool = False
+    email: str = ""
+
+
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _CACHED_TZS: set[str] = set()
 
@@ -101,6 +113,7 @@ class SearchConfig(BaseModel):
     university_name: UniversityNameConfig = Field(default_factory=UniversityNameConfig)
     outlets: OutletsConfig = Field(default_factory=OutletsConfig)
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
+    notify: NotifyConfig = Field(default_factory=NotifyConfig)
 
     @model_validator(mode="after")
     def _validate_range(self) -> "SearchConfig":

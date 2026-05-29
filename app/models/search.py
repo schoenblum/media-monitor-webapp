@@ -41,6 +41,12 @@ DEFAULT_SEARCH_CONFIG: dict = {
         "start_time": "08:00",
         "timezone": "Asia/Tokyo",
     },
+    # v2.5 — email notification for unattended (scheduled/webhook) runs.
+    # Disabled by default; blank email falls back to the owner's login address.
+    "notify": {
+        "enabled": False,
+        "email": "",
+    },
 }
 
 

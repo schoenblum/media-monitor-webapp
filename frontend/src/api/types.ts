@@ -152,6 +152,11 @@ export interface ScheduleConfig {
   timezone: string;    // IANA name, e.g. "Asia/Tokyo"
 }
 
+export interface NotifyConfig {
+  enabled: boolean;
+  email: string; // blank = fall back to the owner's login address
+}
+
 export interface SearchConfig {
   search_window: "last" | "hours" | "range";
   fallback_hours: number;
@@ -163,6 +168,7 @@ export interface SearchConfig {
   university_name: UniversityNameConfig;
   outlets: OutletsConfig;
   schedule: ScheduleConfig;
+  notify: NotifyConfig;
 }
 
 export function defaultSearchConfig(): SearchConfig {
@@ -181,6 +187,10 @@ export function defaultSearchConfig(): SearchConfig {
       interval_hours: 24,
       start_time: "08:00",
       timezone: "Asia/Tokyo",
+    },
+    notify: {
+      enabled: false,
+      email: "",
     },
   };
 }

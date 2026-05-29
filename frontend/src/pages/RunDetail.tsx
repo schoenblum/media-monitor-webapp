@@ -6,20 +6,25 @@ import { triggerLabel } from "../api/types";
 import { RunStatusPill } from "../components/RunStatusPill";
 import { Spinner } from "../components/Spinner";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { EmailExportDialog } from "../components/EmailExportDialog";
 import { sourceHostFor } from "../utils/source";
+import { useAuth } from "../auth";
 
 export default function RunDetail() {
   const { id } = useParams<{ id: string }>();
   const nav = useNavigate();
+  const { user } = useAuth();
   const [run, setRun] = useState<Run | null>(null);
   const [items, setItems] = useState<Result[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [exportOpen, setExportOpen] = useState(false);
+  const [emailOpen, setEmailOpen] = useState(false);
   const [exportRunIds, setExportRunIds] = useState<string[]>([]);
   const [availableRuns, setAvailableRuns] = useState<Run[]>([]);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -85,6 +90,19 @@ export default function RunDetail() {
     setExportOpen(false);
   }
 
+  async function cancelRun() {
+    if (!id) return;
+    setCancelling(true);
+    try {
+      const r = await api.cancelRun(id);
+      setRun(r);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to cancel the run.");
+    } finally {
+      setCancelling(false);
+    }
+  }
+
   if (loading)
     return (
       <div className="card flex items-center justify-center p-10">
@@ -104,10 +122,20 @@ export default function RunDetail() {
           </Link>
           <h2 className="flex-1 text-base font-semibold">{run.search_name}</h2>
           <RunStatusPill status={run.status} />
-          {(run.status === "complete" || run.status === "failed") && (
-            <button className="btn-primary" onClick={() => setExportOpen(true)}>
-              Export CSV
+          {(run.status === "pending" || run.status === "running") && (
+            <button className="btn-secondary" onClick={cancelRun} disabled={cancelling}>
+              {cancelling && <Spinner />} Cancel run
             </button>
+          )}
+          {(run.status === "complete" || run.status === "failed") && (
+            <>
+              <button className="btn-secondary" onClick={() => setEmailOpen(true)}>
+                Email CSV
+              </button>
+              <button className="btn-primary" onClick={() => setExportOpen(true)}>
+                Download CSV
+              </button>
+            </>
           )}
           {(run.status === "complete" || run.status === "failed" || run.status === "skipped") && (
             <button className="btn-danger" onClick={() => setConfirmDelete(true)}>
@@ -256,6 +284,13 @@ export default function RunDetail() {
         setSelected={setExportRunIds}
         onExport={doExport}
         selectedCountInCurrentRun={selected.size}
+      />
+
+      <EmailExportDialog
+        open={emailOpen}
+        onClose={() => setEmailOpen(false)}
+        runIds={id ? [id] : []}
+        defaultEmail={user?.email ?? ""}
       />
 
       <ConfirmDialog

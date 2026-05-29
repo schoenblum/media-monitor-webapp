@@ -30,7 +30,7 @@ from app.schemas.user import (
 )
 from app.services.crypto import encrypt
 from app.services.email import send_welcome_email
-from app.services.security import generate_token, hash_password, hash_token
+from app.services.security import generate_token, generate_webhook_key, hash_password
 
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -486,18 +486,20 @@ async def credentials_status(current: User = Depends(get_current_user)) -> Crede
 
 
 @router.post("/me/webhook-key", response_model=WebhookKeyResponse)
-async def generate_webhook_key(
+async def create_webhook_key(
     current: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ) -> WebhookKeyResponse:
-    raw = generate_token(24)
-    current.webhook_api_key_hash = hash_token(raw)
+    full_key, key_id, secret_hash = generate_webhook_key()
+    current.webhook_key_id = key_id
+    current.webhook_api_key_hash = secret_hash
     await db.commit()
-    return WebhookKeyResponse(api_key=raw)
+    return WebhookKeyResponse(api_key=full_key)
 
 
 @router.delete("/me/webhook-key", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_webhook_key(
     current: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ) -> None:
+    current.webhook_key_id = None
     current.webhook_api_key_hash = None
     await db.commit()

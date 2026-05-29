@@ -148,10 +148,18 @@ missing depending on how the source page exposes it. Don't confuse it with
 the run's **Started** timestamp shown at the top of the Run Detail page and
 in the Run History "Started" column — that's when *you* ran the search.
 
-Tick the rows you want and click **Export CSV**.
+Tick the rows you want, then choose how to receive them:
+
+- **Download CSV** — saves the file to your computer. (On a single run you can
+  also fold in extra completed runs from the dialog.)
+- **Email CSV** — opens a short dialog to send the same CSV as an email
+  attachment. Your login address is pre-filled; change it to send elsewhere.
 
 CSV format: \`Date, Media, Language, Headline, URL\` — UTF-8 with BOM, ready for
 Excel.
+
+While a run is still **Queued** or **Running**, a **Cancel run** button stops
+it; whatever it had already collected is kept and the run is marked stopped.
 
 ---
 
@@ -187,8 +195,9 @@ In **Run History**, tick rows to select them. A toolbar appears offering:
 - **Delete selected** — permanently removes the selected runs and their results.
 - **Merge & open** — combines the result sets (deduplicated by URL) and opens
   them in the same review-and-export view as a single run, with checkboxes,
-  language grouping, and CSV export. Toggling a row updates the selection on
-  the underlying run. The merged view itself is not saved as a new run.
+  language grouping, and both **Download CSV** and **Email CSV**. Toggling a
+  row updates the selection on the underlying run. The merged view itself is
+  not saved as a new run.
 
 The **Select all** checkbox selects only the currently visible rows (filtered
 by the active search/status filter).
@@ -265,12 +274,22 @@ credentials, the search has no terms, or your Google quota is exhausted),
 the run shows up in Run History as **Skipped** with the reason — so a
 forgotten recurring search never produces silence.
 
+### 6a.1 Email notifications
+
+A search's **Notify by email** section turns it into a true "set and forget"
+monitor. Switch it on and (optionally) enter an address — leave it blank to
+use your login email. When a **scheduled** or **webhook** run of that search
+finds at least one new hit, you get an email summarising the count with a link
+to review and export. Manual runs never email — you are already watching them
+in the app. If no new hits are found, no email is sent.
+
 ---
 
 ## 7. Webhook automation
 
 1. Go to **Settings → Webhook API key** and click **Generate**.
-2. **Copy the key now** — it is shown only once.
+2. **Copy the key now** — it is shown only once. It looks like
+   \`<id>.<secret>\`; copy the whole string including the dot.
 3. POST to the webhook endpoint:
 
 \`\`\`
@@ -291,14 +310,15 @@ If a key leaks, **Revoke** it immediately.
 Admins can group accounts into a **university**. Affiliated members:
 
 - **Share** the Languages list, the Outlets library, and the run history. Any
-  member can view *and edit* the shared definitions (last-write-wins). Any
-  member can also toggle result selections on any visible run, but only the
-  run's performer can delete it.
+  member can view *and edit* the shared definitions (last-write-wins), toggle
+  result selections on any visible run, and **delete** any run in the shared
+  history — handy for clearing entries left behind by a member who has since
+  left the university.
 - **Do not share** login credentials, the Google Custom Search API key + CX,
   or the webhook key. Those stay strictly per-user.
-- See a coloured banner at the top of Languages, Outlets, and Run History
-  while operating in shared mode, plus a chip with the university name in the
-  top-right of every page.
+- See a coloured banner at the top of Languages and Outlets while operating in
+  shared mode, a *performed by* column in Run History, plus a chip with the
+  university name in the top-right of every page.
 
 Admin actions (Admin tab):
 
@@ -331,7 +351,13 @@ Dates are extracted from the Google snippet by regex. Some snippets do not inclu
 a publication date.
 
 **Can I export hits from multiple runs in one CSV?**
-Yes — use **Merge & open** in Run History, then export from the merged view.
+Yes — use **Merge & open** in Run History, then download or email the CSV from
+the merged view.
+
+**Can the app email me when there are new hits?**
+Yes. Turn on **Notify by email** in a search's *Perform → Notify* area, and run
+it automatically (§6a) or via the webhook. You can also email any CSV export
+on demand from the **Email CSV** button on a run or the merged view.
 `;
 
 export default function Manual() {

@@ -129,3 +129,25 @@ advisory-lock helper, the database driver):
    interval — not two. Two rows means the lock isn't engaging; investigate
    before declaring the deploy good.
 4. Delete the throwaway search when done.
+
+## 9. Verify the frontend build before deploying (no local Node)
+
+The developer Mac has **no Node/npm toolchain** — the frontend is only ever
+built on the server (`deploy.sh` runs `npm install && npm run build`). So a
+TypeScript error in a `.tsx` change is invisible locally and would surface mid-
+deploy. `deploy.sh` uses `set -e` and copies the new bundle into `app/static/`
+*after* a successful build, so a failed build aborts safely without touching the
+running service — but to avoid a failed deploy attempt, do a throwaway build
+first:
+
+```bash
+ssh deploy@204.168.246.208 '
+  set -e
+  rm -rf /tmp/mm-build && git clone -q --depth 1 \
+    git@github.com:schoenblum/media-monitor-webapp.git /tmp/mm-build
+  cd /tmp/mm-build/frontend && npm install --no-audit --no-fund && npm run build
+  echo "BUILD OK"; rm -rf /tmp/mm-build'
+```
+
+Only run the real `./deploy.sh` once that prints `BUILD OK`. (Push first — the
+trial build clones from GitHub.)
