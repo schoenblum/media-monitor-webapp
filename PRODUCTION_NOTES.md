@@ -151,3 +151,26 @@ ssh deploy@204.168.246.208 '
 
 Only run the real `./deploy.sh` once that prints `BUILD OK`. (Push first — the
 trial build clones from GitHub.)
+
+## 10. Don't trust the CI gate blindly — verify it actually ran
+
+Pushing is supposed to trigger CI (§2), but a queued run is **not** a passing
+run. As of v2.5/v2.6 the GitHub Actions runs have been sitting in `queued` for
+days without ever executing (an account-level Actions runner/minutes issue),
+so the "green check" gate is effectively unavailable. Until that's resolved:
+
+- Treat **local `pytest tests/ -v`** as the real gate — run it before every
+  push and don't push red.
+- For frontend changes, the server trial build (§9) is the real type-check.
+- Check actual CI state via the API, not just "I pushed":
+  `curl -s https://api.github.com/repos/schoenblum/media-monitor-webapp/actions/runs?per_page=3`
+  and look at `status`/`conclusion` (the repo is public, no auth needed).
+
+## 11. Record generated secrets from the actual output, not from memory
+
+When you generate a secret on the server (a passphrase, key, password) and copy
+it into the `HANDOVER.md` vault, **paste the exact string from the command
+output** — never reconstruct it from memory or a paraphrase. A vault entry that
+doesn't match the live value is worse than none (e.g. a backup passphrase that
+doesn't decrypt the backups). After recording, re-read the live source
+(`grep '^FOO=' .env`) and diff it against what you wrote.
