@@ -419,6 +419,77 @@ async def test_any_member_can_delete_run(client, session_factory):
         assert await db.get(Run, run.id) is None
 
 
+# ---------------------------------------------------------------------------
+# Admin database backup (v2.6)
+# ---------------------------------------------------------------------------
+
+
+def test_backup_encrypt_decrypt_roundtrip():
+    from app.services.backup import decrypt_bytes, encrypt_bytes
+
+    blob = encrypt_bytes(b"PGDMP-fake-dump-bytes", "s3cret-passphrase")
+    assert blob[:6] == b"MMBK1\n"
+    assert decrypt_bytes(blob, "s3cret-passphrase") == b"PGDMP-fake-dump-bytes"
+    with pytest.raises(Exception):
+        decrypt_bytes(blob, "wrong-passphrase")
+
+
+@pytest.mark.asyncio
+async def test_backup_status_requires_admin(client):
+    admin = await _login(client)
+    info = await _create_user(client, admin, "plainuser@example.com")
+    h = await _login_clear_force(client, info["email"], info["password"])
+    assert (await client.get("/api/v1/backups/status", headers=h)).status_code == 403
+    assert (await client.post("/api/v1/backups/prepare", headers=h)).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_backup_status_download_and_prune(client, tmp_path, monkeypatch):
+    from app.config import get_settings
+    from app.services.backup import encrypt_bytes
+
+    s = get_settings()
+    monkeypatch.setattr(s, "BACKUP_DOWNLOAD_DIR", str(tmp_path))
+    monkeypatch.setattr(s, "BACKUP_PASSPHRASE", "test-pass")
+    (tmp_path / "media_monitor_20260101T000000Z.dump.enc").write_bytes(
+        encrypt_bytes(b"the-dump", "test-pass")
+    )
+
+    h = await _login(client)
+    body = (await client.get("/api/v1/backups/status", headers=h)).json()
+    assert body["configured"] is True and body["available"] is True
+    assert body["latest"]["filename"].endswith(".dump.enc")
+
+    r = await client.get("/api/v1/backups/download", headers=h)
+    assert r.status_code == 200
+    assert r.content[:6] == b"MMBK1\n"
+
+    # Download prunes the prepared file(s).
+    assert (await client.get("/api/v1/backups/status", headers=h)).json()["available"] is False
+    assert (await client.get("/api/v1/backups/download", headers=h)).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_backup_prepare_requires_passphrase(client, monkeypatch):
+    from app.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "BACKUP_PASSPHRASE", None)
+    h = await _login(client)
+    assert (await client.post("/api/v1/backups/prepare", headers=h)).status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_prepare_backup_skips_off_postgres(client, tmp_path, monkeypatch):
+    from app.config import get_settings
+    from app.services.backup import prepare_backup
+
+    s = get_settings()
+    monkeypatch.setattr(s, "BACKUP_PASSPHRASE", "x")
+    monkeypatch.setattr(s, "BACKUP_DOWNLOAD_DIR", str(tmp_path))
+    res = await prepare_backup()
+    assert res["ok"] is False and "PostgreSQL" in res["reason"]
+
+
 @pytest.mark.asyncio
 async def test_outsider_cannot_delete_run(client, session_factory):
     from app.models.run import Run, RunStatus

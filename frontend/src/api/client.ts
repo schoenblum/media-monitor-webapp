@@ -288,6 +288,16 @@ export const api = {
       body: JSON.stringify({ run_ids, email }),
     }),
 
+  // Backups (admin only)
+  backupStatus: () =>
+    request<{
+      configured: boolean;
+      available: boolean;
+      latest: { filename: string; size_bytes: number; created_at: string } | null;
+    }>("/backups/status"),
+  prepareBackup: () => request<{ detail: string }>("/backups/prepare", { method: "POST" }),
+  downloadBackup: () => fetchBlob("/backups/download"),
+
   // Universities (admin only)
   listUniversities: () => request<University[]>("/universities"),
   createUniversity: (name: string) =>

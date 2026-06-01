@@ -81,6 +81,33 @@ A failed off-box sync marks the unit failed (visible in
 the local dump, which is written first. Also consider enabling Hetzner's own
 VM snapshots in the Cloud Console as a second, independent layer.
 
+## Admin database backup (v2.6)
+
+The app prepares an encrypted whole-DB backup weekly (and on the admin
+*Prepare now* button), downloadable from the Dashboard. Setup on the host:
+
+```bash
+# 1. Set the passphrase + (optionally) the prepared-file dir in the app .env:
+#      BACKUP_PASSPHRASE=<a strong secret — this IS the decryption key>
+#      BACKUP_DOWNLOAD_DIR=/var/backups/media_monitor/prepared
+sudo $EDITOR /home/deploy/apps/media-monitor-webapp/.env
+# 2. Create the deploy-writable prepared dir:
+sudo install -d -o deploy -g deploy -m 0750 /var/backups/media_monitor/prepared
+sudo systemctl restart media-monitor
+```
+
+Decrypt + restore a downloaded backup (on any machine with `cryptography`):
+
+```bash
+python3 ops/decrypt_backup.py media_monitor_<ts>.dump.enc   # prompts for BACKUP_PASSPHRASE
+pg_restore -h localhost -U media_monitor_user -d media_monitor \
+           --clean --if-exists media_monitor_<ts>.dump
+```
+
+**Keep `BACKUP_PASSPHRASE` safe** — it is the only key to these files. Losing it
+makes existing `*.dump.enc` backups unrecoverable. The on-box systemd daily
+`pg_dump` (above) remains as a separate, unencrypted local copy.
+
 ## Login / webhook rate limiting (v2.5)
 
 `nginx-rate-limit.conf` documents the `limit_req` snippet applied to

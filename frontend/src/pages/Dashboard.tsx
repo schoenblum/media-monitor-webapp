@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { api } from "../api/client";
+import { api, downloadBlob } from "../api/client";
 import type { Outlet, Run, Search, User } from "../api/types";
 import { RunStatusPill } from "../components/RunStatusPill";
 import { Spinner } from "../components/Spinner";
@@ -155,6 +155,8 @@ export default function Dashboard() {
     <div className="space-y-6">
       <CredentialsBanner user={user} />
 
+      {user?.role === "admin" && <BackupCard />}
+
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <Stat
           label="Active outlets"
@@ -270,6 +272,117 @@ export default function Dashboard() {
           <BarList data={hits.byLang} max={20} />
         </div>
       </div>
+    </div>
+  );
+}
+
+interface BackupStatus {
+  configured: boolean;
+  available: boolean;
+  latest: { filename: string; size_bytes: number; created_at: string } | null;
+}
+
+function BackupCard() {
+  const [status, setStatus] = useState<BackupStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function refresh() {
+    try {
+      setStatus(await api.backupStatus());
+    } catch {
+      /* ignore */
+    }
+  }
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  async function prepare() {
+    setBusy(true);
+    setMsg("Preparing backup…");
+    try {
+      await api.prepareBackup();
+      for (let i = 0; i < 12; i++) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const s = await api.backupStatus();
+        setStatus(s);
+        if (s.available) {
+          setMsg("Backup ready to download.");
+          break;
+        }
+      }
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Failed to prepare backup.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function download() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const fn = status?.latest?.filename ?? "media_monitor_backup.dump.enc";
+      const blob = await api.downloadBackup();
+      downloadBlob(blob, fn);
+      setMsg("Downloaded. The server copy has been removed — decrypt with ops/decrypt_backup.py.");
+      await refresh();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Download failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!status) return null;
+
+  const sizeKb = status.latest ? Math.max(1, Math.round(status.latest.size_bytes / 1024)) : 0;
+
+  return (
+    <div className="card p-5">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="text-xs uppercase tracking-wide text-slate-500">Database backup (admin)</div>
+          {!status.configured ? (
+            <div className="mt-0.5 text-sm text-amber-700">
+              Not configured — set <code>BACKUP_PASSPHRASE</code> in the server <code>.env</code>.
+            </div>
+          ) : status.available && status.latest ? (
+            <div className="mt-0.5 text-sm">
+              <span className="font-semibold">Ready:</span> {status.latest.filename} · {sizeKb} KB ·
+              prepared {new Date(status.latest.created_at).toLocaleString()}
+            </div>
+          ) : (
+            <div className="mt-0.5 text-sm text-slate-600">
+              No backup waiting. Prepared automatically each week, or make one now.
+            </div>
+          )}
+        </div>
+        {status.configured && (
+          <>
+            <button className="btn-secondary" disabled={busy} onClick={prepare}>
+              {busy && <Spinner />} Prepare now
+            </button>
+            <button
+              className="btn-primary"
+              disabled={busy || !status.available}
+              onClick={download}
+              title={status.available ? "Download then remove from the server" : "No backup ready"}
+            >
+              Download backup
+            </button>
+          </>
+        )}
+      </div>
+      {msg && <p className="mt-2 text-xs text-slate-500">{msg}</p>}
+      {status.configured && (
+        <p className="mt-2 text-xs text-slate-400">
+          Encrypted at rest with your backup passphrase. Downloading removes it (and any other
+          pending backups) from the server. Restore: decrypt with <code>ops/decrypt_backup.py</code>,
+          then <code>pg_restore</code>.
+        </p>
+      )}
     </div>
   );
 }

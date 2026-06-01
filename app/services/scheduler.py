@@ -330,6 +330,7 @@ async def start_scheduler() -> None:
     _scheduler.start()
     await reconcile_jobs()
     _register_reaper_job()
+    _register_backup_job()
     logger.info("Scheduler started; %d job(s) registered", len(_scheduler.get_jobs()))
 
 
@@ -349,6 +350,30 @@ def _register_reaper_job() -> None:
         reap_stuck_runs,
         trigger=IntervalTrigger(minutes=5),
         id="mm-reaper",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+
+
+def _register_backup_job() -> None:
+    """Register the weekly database-backup job (v2.6).
+
+    Fires every Sunday 04:00 UTC. Both workers register it; single-firing is
+    enforced inside ``prepare_backup`` by a fixed advisory lock, so at most one
+    encrypted dump is produced per fire. A no-op if the passphrase is unset
+    (the job records the reason and exits).
+    """
+    if _scheduler is None:
+        return
+    from apscheduler.triggers.cron import CronTrigger
+
+    from app.services.backup import prepare_backup_and_notify
+
+    _scheduler.add_job(
+        prepare_backup_and_notify,
+        trigger=CronTrigger(day_of_week="sun", hour=4, minute=0, timezone=timezone.utc),
+        id="mm-backup-weekly",
         replace_existing=True,
         coalesce=True,
         max_instances=1,

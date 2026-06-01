@@ -36,6 +36,15 @@ class Settings(BaseSettings):
     JWT_EXPIRE_MINUTES: int = 60
     PASSWORD_RESET_EXPIRE_MINUTES: int = 60
 
+    # Admin database backup (v2.6). The weekly job pg_dumps the whole database,
+    # encrypts it at rest with a key derived from BACKUP_PASSPHRASE, and makes
+    # it downloadable to admins. Without a passphrase the feature reports
+    # "not configured" rather than writing a plaintext dump. Decrypt with
+    # ops/decrypt_backup.py, then pg_restore.
+    BACKUP_PASSPHRASE: Optional[str] = None
+    BACKUP_DOWNLOAD_DIR: str = "/var/backups/media_monitor/prepared"
+    BACKUP_KEEP: int = 2  # prepared encrypted backups to retain on the server
+
 
 @lru_cache
 def get_settings() -> Settings:

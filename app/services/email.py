@@ -153,6 +153,38 @@ async def send_run_notification(
     return await send_email(to, subject, body_html, body_text)
 
 
+async def send_backup_ready_email(to: str, filename: str, size_bytes: int) -> bool:
+    """Notify an admin that a new encrypted database backup is ready to download."""
+    settings = get_settings()
+    url = f"{settings.BASE_URL.rstrip('/')}/"
+    kb = max(1, size_bytes // 1024)
+    subject = "[Media Monitor] Database backup ready to download"
+    body_text = (
+        f"A new encrypted database backup is ready ({filename}, ~{kb} KB).\n\n"
+        f"Sign in as an admin and use the Backup card on the Dashboard to "
+        f"download it: {url}\n\n"
+        f"Downloading removes it from the server. Decrypt with "
+        f"ops/decrypt_backup.py using the backup passphrase.\n\nContact: mm@schenz.eu"
+    )
+    body_html = f"""<!DOCTYPE html>
+<html>
+<body style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+  <h2 style="color:#1e40af">Media Monitor — backup ready</h2>
+  <p>A new <strong>encrypted</strong> database backup is ready
+     (<code>{escape(filename)}</code>, ~{kb} KB).</p>
+  <p><a href="{escape(url)}"
+        style="display:inline-block;background:#1e40af;color:#fff;padding:8px 16px;border-radius:6px;text-decoration:none">
+     Open the Dashboard</a></p>
+  <p style="font-size:0.9em;color:#555">Use the <strong>Backup</strong> card to download it.
+     Downloading removes it from the server. Decrypt with
+     <code>ops/decrypt_backup.py</code> and the backup passphrase.</p>
+  <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0">
+  <p style="font-size:0.8em;color:#94a3b8">Media Monitor · <a href="mailto:mm@schenz.eu">mm@schenz.eu</a></p>
+</body>
+</html>"""
+    return await send_email(to, subject, body_html, body_text)
+
+
 async def send_export_email(
     to: str,
     csv_bytes: bytes,
