@@ -22,15 +22,24 @@ Kobe University; usable by any organisation.
 - **Three time windows**: search since the last successful run, look back N hours,
   or restrict to an explicit `date_from` / `date_to` range (e.g. press-release
   pickup monitoring).
-- **Background execution + live status**: runs execute asynchronously; the UI polls
-  the run-detail endpoint and renders results as they come in.
-- **CSV export**: pick the results you want, optionally roll in selections from prior
-  runs, and download a UTF-8 CSV with BOM + RFC 4180 quoting (Excel-friendly).
+- **Background execution + live status**: runs execute asynchronously and the UI
+  renders results as they arrive; in-progress runs can be cancelled, and runs
+  interrupted by a server restart are recovered automatically.
+- **Scheduled / automatic runs**: per-search cadence (APScheduler), with optional
+  email notification when a scheduled or webhook run finds new hits.
+- **University affiliation**: optionally group accounts so members share the outlet
+  library, languages, and run history, while credentials stay strictly per-user.
+- **Export**: pick the results you want, optionally roll in selections from prior
+  runs, then download a UTF-8 CSV (BOM + RFC 4180 quoting, Excel-friendly) — or
+  have it emailed to you.
 - **Bulk CSV import / export** for both Outlets and Languages, with a preview /
   duplicate-resolution flow and per-row resolution.
-- **Webhook trigger**: external systems can start runs via an API key endpoint.
-- **Admin console**: create / activate / deactivate / delete users; bootstrap admin
-  on first start.
+- **Webhook trigger**: external systems can start runs via an API key endpoint
+  (rate-limited; keys are `<key_id>.<secret>` with an O(1) indexed lookup).
+- **Admin console**: create / activate / deactivate / delete / duplicate users,
+  university affiliation, webhook keys, email password reset, and **encrypted,
+  downloadable database backups** (weekly or on demand); bootstrap admin on
+  first start.
 - **Built-in manual**: comprehensive usage guide at `/manual`.
 
 ---
@@ -46,7 +55,7 @@ Kobe University; usable by any organisation.
 | Background tasks | FastAPI `BackgroundTasks`                               |
 | HTTP client      | `httpx` (async, used for Google CSE)                    |
 | Frontend         | React 18 + TypeScript + Vite + Tailwind CSS             |
-| Encryption       | `cryptography` (Fernet) — for stored Google API keys    |
+| Encryption       | `cryptography` — Fernet (Google API keys, rotatable via MultiFernet) + scrypt/AES-GCM (DB backups) |
 | Spreadsheets     | Python stdlib `csv` (UTF-8 BOM, RFC 4180 quoting)       |
 
 ---
@@ -126,7 +135,10 @@ After the first deployment, future updates are a single command:
 | `ENVIRONMENT`            | no       | `production` / `development` |
 | `BOOTSTRAP_ADMIN_EMAIL`  | yes      | Email of the initial admin account |
 | `BOOTSTRAP_ADMIN_PASSWORD` | yes    | Temp password — forced-change on first login |
-| `SMTP_HOST` / `_PORT` / `_USER` / `_PASSWORD` / `_FROM` | no | Phase 2; leave empty to log reset URLs to the console |
+| `SMTP_HOST` / `_PORT` / `_USER` / `_PASSWORD` / `_FROM` | no | Email (resets, welcome, run notifications, exports); leave empty to log reset URLs to the console |
+| `FERNET_KEYS`            | no       | Older Fernet keys (comma-separated) kept for decryption during a key rotation |
+| `BACKUP_PASSPHRASE`      | no       | Enables encrypted admin DB backups; **this is the decryption key** for them |
+| `BACKUP_DOWNLOAD_DIR`    | no       | Where prepared backups wait for download (default `/var/backups/media_monitor/prepared`) |
 
 ---
 
